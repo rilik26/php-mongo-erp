@@ -6,7 +6,7 @@
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *   https://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -33,27 +33,24 @@ use function is_float;
 use function is_integer;
 use function is_object;
 use function is_string;
+use function MongoDB\is_document;
 
 /**
  * Operation for the count command.
  *
- * @api
  * @see \MongoDB\Collection::count()
- * @see http://docs.mongodb.org/manual/reference/command/count/
+ * @see https://mongodb.com/docs/manual/reference/command/count/
  */
 class Count implements Executable, Explainable
 {
-    /** @var string */
-    private $databaseName;
+    private string $databaseName;
 
-    /** @var string */
-    private $collectionName;
+    private string $collectionName;
 
     /** @var array|object */
     private $filter;
 
-    /** @var array */
-    private $options;
+    private array $options;
 
     /**
      * Constructs a count command.
@@ -61,6 +58,10 @@ class Count implements Executable, Explainable
      * Supported options:
      *
      *  * collation (document): Collation specification.
+     *
+     *  * comment (mixed): BSON value to attach as a comment to this command.
+     *
+     *    This is not supported for servers versions < 4.4.
      *
      *  * hint (string|document): The index to use. Specify either the index
      *    name as a string or the index key pattern as a document. If specified,
@@ -86,14 +87,14 @@ class Count implements Executable, Explainable
      * @param array        $options        Command options
      * @throws InvalidArgumentException for parameter/option parsing errors
      */
-    public function __construct($databaseName, $collectionName, $filter = [], array $options = [])
+    public function __construct(string $databaseName, string $collectionName, $filter = [], array $options = [])
     {
-        if (! is_array($filter) && ! is_object($filter)) {
-            throw InvalidArgumentException::invalidType('$filter', $filter, 'array or object');
+        if (! is_document($filter)) {
+            throw InvalidArgumentException::expectedDocumentType('$filter', $filter);
         }
 
-        if (isset($options['collation']) && ! is_array($options['collation']) && ! is_object($options['collation'])) {
-            throw InvalidArgumentException::invalidType('"collation" option', $options['collation'], 'array or object');
+        if (isset($options['collation']) && ! is_document($options['collation'])) {
+            throw InvalidArgumentException::expectedDocumentType('"collation" option', $options['collation']);
         }
 
         if (isset($options['hint']) && ! is_string($options['hint']) && ! is_array($options['hint']) && ! is_object($options['hint'])) {
@@ -128,8 +129,8 @@ class Count implements Executable, Explainable
             unset($options['readConcern']);
         }
 
-        $this->databaseName = (string) $databaseName;
-        $this->collectionName = (string) $collectionName;
+        $this->databaseName = $databaseName;
+        $this->collectionName = $collectionName;
         $this->filter = $filter;
         $this->options = $options;
     }
@@ -138,7 +139,6 @@ class Count implements Executable, Explainable
      * Execute the operation.
      *
      * @see Executable::execute()
-     * @param Server $server
      * @return integer
      * @throws UnexpectedValueException if the command response was malformed
      * @throws UnsupportedException if read concern is used and unsupported
@@ -155,7 +155,7 @@ class Count implements Executable, Explainable
         $result = current($cursor->toArray());
 
         // Older server versions may return a float
-        if (! isset($result->n) || ! (is_integer($result->n) || is_float($result->n))) {
+        if (! is_object($result) || ! isset($result->n) || ! (is_integer($result->n) || is_float($result->n))) {
             throw new UnexpectedValueException('count command did not return a numeric "n" value');
         }
 
@@ -166,24 +166,28 @@ class Count implements Executable, Explainable
      * Returns the command document for this operation.
      *
      * @see Explainable::getCommandDocument()
-     * @param Server $server
      * @return array
      */
-    public function getCommandDocument(Server $server)
+    public function getCommandDocument()
     {
-        return $this->createCommandDocument();
+        $cmd = $this->createCommandDocument();
+
+        // Read concern can change the query plan
+        if (isset($this->options['readConcern'])) {
+            $cmd['readConcern'] = $this->options['readConcern'];
+        }
+
+        return $cmd;
     }
 
     /**
      * Create the count command document.
-     *
-     * @return array
      */
-    private function createCommandDocument()
+    private function createCommandDocument(): array
     {
         $cmd = ['count' => $this->collectionName];
 
-        if (! empty($this->filter)) {
+        if ($this->filter !== []) {
             $cmd['query'] = (object) $this->filter;
         }
 
@@ -195,7 +199,7 @@ class Count implements Executable, Explainable
             $cmd['hint'] = is_array($this->options['hint']) ? (object) $this->options['hint'] : $this->options['hint'];
         }
 
-        foreach (['limit', 'maxTimeMS', 'skip'] as $option) {
+        foreach (['comment', 'limit', 'maxTimeMS', 'skip'] as $option) {
             if (isset($this->options[$option])) {
                 $cmd[$option] = $this->options[$option];
             }
@@ -207,10 +211,9 @@ class Count implements Executable, Explainable
     /**
      * Create options for executing the command.
      *
-     * @see http://php.net/manual/en/mongodb-driver-server.executereadcommand.php
-     * @return array
+     * @see https://php.net/manual/en/mongodb-driver-server.executereadcommand.php
      */
-    private function createOptions()
+    private function createOptions(): array
     {
         $options = [];
 

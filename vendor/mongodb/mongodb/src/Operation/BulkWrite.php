@@ -6,7 +6,7 @@
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *   https://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -18,6 +18,7 @@
 namespace MongoDB\Operation;
 
 use MongoDB\BulkWriteResult;
+use MongoDB\Codec\DocumentCodec;
 use MongoDB\Driver\BulkWrite as Bulk;
 use MongoDB\Driver\Exception\RuntimeException as DriverRuntimeException;
 use MongoDB\Driver\Server;
@@ -26,13 +27,14 @@ use MongoDB\Driver\WriteConcern;
 use MongoDB\Exception\InvalidArgumentException;
 use MongoDB\Exception\UnsupportedException;
 
+use function array_is_list;
 use function array_key_exists;
 use function count;
 use function current;
 use function is_array;
 use function is_bool;
-use function is_object;
 use function key;
+use function MongoDB\is_document;
 use function MongoDB\is_first_key_operator;
 use function MongoDB\is_pipeline;
 use function sprintf;
@@ -40,7 +42,6 @@ use function sprintf;
 /**
  * Operation for executing multiple write operations.
  *
- * @api
  * @see \MongoDB\Collection::bulkWrite()
  */
 class BulkWrite implements Executable
@@ -52,17 +53,14 @@ class BulkWrite implements Executable
     public const UPDATE_MANY = 'updateMany';
     public const UPDATE_ONE  = 'updateOne';
 
-    /** @var string */
-    private $databaseName;
+    private string $databaseName;
 
-    /** @var string */
-    private $collectionName;
+    private string $collectionName;
 
     /** @var array[] */
-    private $operations;
+    private array $operations;
 
-    /** @var array */
-    private $options;
+    private array $options;
 
     /**
      * Constructs a bulk write operation.
@@ -103,9 +101,23 @@ class BulkWrite implements Executable
      *  * bypassDocumentValidation (boolean): If true, allows the write to
      *    circumvent document level validation. The default is false.
      *
+     *  * codec (MongoDB\Codec\DocumentCodec): Codec used to decode documents
+     *    from BSON to PHP objects. This option is also used to encode PHP
+     *    objects into BSON for insertOne and replaceOne operations.
+     *
+     *  * comment (mixed): BSON value to attach as a comment to this command(s)
+     *    associated with this bulk write.
+     *
+     *    This is not supported for servers versions < 4.4.
+     *
      *  * ordered (boolean): If true, when an insert fails, return without
      *    performing the remaining writes. If false, when a write fails,
      *    continue with the remaining writes, if any. The default is true.
+     *
+     *  * let (document): Map of parameter names and values. Values must be
+     *    constant or closed expressions that do not reference document fields.
+     *    Parameters can then be accessed as variables in an aggregate
+     *    expression context (e.g. "$$var").
      *
      *  * session (MongoDB\Driver\Session): Client session.
      *
@@ -117,150 +129,24 @@ class BulkWrite implements Executable
      * @param array   $options        Command options
      * @throws InvalidArgumentException for parameter/option parsing errors
      */
-    public function __construct($databaseName, $collectionName, array $operations, array $options = [])
+    public function __construct(string $databaseName, string $collectionName, array $operations, array $options = [])
     {
         if (empty($operations)) {
             throw new InvalidArgumentException('$operations is empty');
         }
 
-        $expectedIndex = 0;
-
-        foreach ($operations as $i => $operation) {
-            if ($i !== $expectedIndex) {
-                throw new InvalidArgumentException(sprintf('$operations is not a list (unexpected index: "%s")', $i));
-            }
-
-            if (! is_array($operation)) {
-                throw InvalidArgumentException::invalidType(sprintf('$operations[%d]', $i), $operation, 'array');
-            }
-
-            if (count($operation) !== 1) {
-                throw new InvalidArgumentException(sprintf('Expected one element in $operation[%d], actually: %d', $i, count($operation)));
-            }
-
-            $type = key($operation);
-            $args = current($operation);
-
-            if (! isset($args[0]) && ! array_key_exists(0, $args)) {
-                throw new InvalidArgumentException(sprintf('Missing first argument for $operations[%d]["%s"]', $i, $type));
-            }
-
-            if (! is_array($args[0]) && ! is_object($args[0])) {
-                throw InvalidArgumentException::invalidType(sprintf('$operations[%d]["%s"][0]', $i, $type), $args[0], 'array or object');
-            }
-
-            switch ($type) {
-                case self::INSERT_ONE:
-                    break;
-
-                case self::DELETE_MANY:
-                case self::DELETE_ONE:
-                    if (! isset($args[1])) {
-                        $args[1] = [];
-                    }
-
-                    if (! is_array($args[1])) {
-                        throw InvalidArgumentException::invalidType(sprintf('$operations[%d]["%s"][1]', $i, $type), $args[1], 'array');
-                    }
-
-                    $args[1]['limit'] = ($type === self::DELETE_ONE ? 1 : 0);
-
-                    if (isset($args[1]['collation']) && ! is_array($args[1]['collation']) && ! is_object($args[1]['collation'])) {
-                        throw InvalidArgumentException::invalidType(sprintf('$operations[%d]["%s"][1]["collation"]', $i, $type), $args[1]['collation'], 'array or object');
-                    }
-
-                    $operations[$i][$type][1] = $args[1];
-
-                    break;
-
-                case self::REPLACE_ONE:
-                    if (! isset($args[1]) && ! array_key_exists(1, $args)) {
-                        throw new InvalidArgumentException(sprintf('Missing second argument for $operations[%d]["%s"]', $i, $type));
-                    }
-
-                    if (! is_array($args[1]) && ! is_object($args[1])) {
-                        throw InvalidArgumentException::invalidType(sprintf('$operations[%d]["%s"][1]', $i, $type), $args[1], 'array or object');
-                    }
-
-                    if (is_first_key_operator($args[1])) {
-                        throw new InvalidArgumentException(sprintf('First key in $operations[%d]["%s"][1] is an update operator', $i, $type));
-                    }
-
-                    if (! isset($args[2])) {
-                        $args[2] = [];
-                    }
-
-                    if (! is_array($args[2])) {
-                        throw InvalidArgumentException::invalidType(sprintf('$operations[%d]["%s"][2]', $i, $type), $args[2], 'array');
-                    }
-
-                    $args[2]['multi'] = false;
-                    $args[2] += ['upsert' => false];
-
-                    if (isset($args[2]['collation']) && ! is_array($args[2]['collation']) && ! is_object($args[2]['collation'])) {
-                        throw InvalidArgumentException::invalidType(sprintf('$operations[%d]["%s"][2]["collation"]', $i, $type), $args[2]['collation'], 'array or object');
-                    }
-
-                    if (! is_bool($args[2]['upsert'])) {
-                        throw InvalidArgumentException::invalidType(sprintf('$operations[%d]["%s"][2]["upsert"]', $i, $type), $args[2]['upsert'], 'boolean');
-                    }
-
-                    $operations[$i][$type][2] = $args[2];
-
-                    break;
-
-                case self::UPDATE_MANY:
-                case self::UPDATE_ONE:
-                    if (! isset($args[1]) && ! array_key_exists(1, $args)) {
-                        throw new InvalidArgumentException(sprintf('Missing second argument for $operations[%d]["%s"]', $i, $type));
-                    }
-
-                    if (! is_array($args[1]) && ! is_object($args[1])) {
-                        throw InvalidArgumentException::invalidType(sprintf('$operations[%d]["%s"][1]', $i, $type), $args[1], 'array or object');
-                    }
-
-                    if (! is_first_key_operator($args[1]) && ! is_pipeline($args[1])) {
-                        throw new InvalidArgumentException(sprintf('First key in $operations[%d]["%s"][1] is neither an update operator nor a pipeline', $i, $type));
-                    }
-
-                    if (! isset($args[2])) {
-                        $args[2] = [];
-                    }
-
-                    if (! is_array($args[2])) {
-                        throw InvalidArgumentException::invalidType(sprintf('$operations[%d]["%s"][2]', $i, $type), $args[2], 'array');
-                    }
-
-                    $args[2]['multi'] = ($type === self::UPDATE_MANY);
-                    $args[2] += ['upsert' => false];
-
-                    if (isset($args[2]['arrayFilters']) && ! is_array($args[2]['arrayFilters'])) {
-                        throw InvalidArgumentException::invalidType(sprintf('$operations[%d]["%s"][2]["arrayFilters"]', $i, $type), $args[2]['arrayFilters'], 'array');
-                    }
-
-                    if (isset($args[2]['collation']) && ! is_array($args[2]['collation']) && ! is_object($args[2]['collation'])) {
-                        throw InvalidArgumentException::invalidType(sprintf('$operations[%d]["%s"][2]["collation"]', $i, $type), $args[2]['collation'], 'array or object');
-                    }
-
-                    if (! is_bool($args[2]['upsert'])) {
-                        throw InvalidArgumentException::invalidType(sprintf('$operations[%d]["%s"][2]["upsert"]', $i, $type), $args[2]['upsert'], 'boolean');
-                    }
-
-                    $operations[$i][$type][2] = $args[2];
-
-                    break;
-
-                default:
-                    throw new InvalidArgumentException(sprintf('Unknown operation type "%s" in $operations[%d]', $type, $i));
-            }
-
-            $expectedIndex += 1;
+        if (! array_is_list($operations)) {
+            throw new InvalidArgumentException('$operations is not a list');
         }
 
         $options += ['ordered' => true];
 
         if (isset($options['bypassDocumentValidation']) && ! is_bool($options['bypassDocumentValidation'])) {
             throw InvalidArgumentException::invalidType('"bypassDocumentValidation" option', $options['bypassDocumentValidation'], 'boolean');
+        }
+
+        if (isset($options['codec']) && ! $options['codec'] instanceof DocumentCodec) {
+            throw InvalidArgumentException::invalidType('"codec" option', $options['codec'], DocumentCodec::class);
         }
 
         if (! is_bool($options['ordered'])) {
@@ -275,6 +161,10 @@ class BulkWrite implements Executable
             throw InvalidArgumentException::invalidType('"writeConcern" option', $options['writeConcern'], WriteConcern::class);
         }
 
+        if (isset($options['let']) && ! is_document($options['let'])) {
+            throw InvalidArgumentException::expectedDocumentType('"let" option', $options['let']);
+        }
+
         if (isset($options['bypassDocumentValidation']) && ! $options['bypassDocumentValidation']) {
             unset($options['bypassDocumentValidation']);
         }
@@ -283,9 +173,9 @@ class BulkWrite implements Executable
             unset($options['writeConcern']);
         }
 
-        $this->databaseName = (string) $databaseName;
-        $this->collectionName = (string) $collectionName;
-        $this->operations = $operations;
+        $this->databaseName = $databaseName;
+        $this->collectionName = $collectionName;
+        $this->operations = $this->validateOperations($operations, $options['codec'] ?? null);
         $this->options = $options;
     }
 
@@ -293,7 +183,6 @@ class BulkWrite implements Executable
      * Execute the operation.
      *
      * @see Executable::execute()
-     * @param Server $server
      * @return BulkWriteResult
      * @throws UnsupportedException if write concern is used and unsupported
      * @throws DriverRuntimeException for other driver errors (e.g. connection errors)
@@ -322,10 +211,11 @@ class BulkWrite implements Executable
                     $insertedIds[$i] = $bulk->insert($args[0]);
                     break;
 
-                case self::REPLACE_ONE:
                 case self::UPDATE_MANY:
                 case self::UPDATE_ONE:
+                case self::REPLACE_ONE:
                     $bulk->update($args[0], $args[1], $args[2]);
+                    break;
             }
         }
 
@@ -337,15 +227,20 @@ class BulkWrite implements Executable
     /**
      * Create options for constructing the bulk write.
      *
-     * @see https://www.php.net/manual/en/mongodb-driver-bulkwrite.construct.php
-     * @return array
+     * @see https://php.net/manual/en/mongodb-driver-bulkwrite.construct.php
      */
-    private function createBulkWriteOptions()
+    private function createBulkWriteOptions(): array
     {
         $options = ['ordered' => $this->options['ordered']];
 
-        if (isset($this->options['bypassDocumentValidation'])) {
-            $options['bypassDocumentValidation'] = $this->options['bypassDocumentValidation'];
+        foreach (['bypassDocumentValidation', 'comment'] as $option) {
+            if (isset($this->options[$option])) {
+                $options[$option] = $this->options[$option];
+            }
+        }
+
+        if (isset($this->options['let'])) {
+            $options['let'] = (object) $this->options['let'];
         }
 
         return $options;
@@ -354,10 +249,9 @@ class BulkWrite implements Executable
     /**
      * Create options for executing the bulk write.
      *
-     * @see http://php.net/manual/en/mongodb-driver-server.executebulkwrite.php
-     * @return array
+     * @see https://php.net/manual/en/mongodb-driver-server.executebulkwrite.php
      */
-    private function createExecuteOptions()
+    private function createExecuteOptions(): array
     {
         $options = [];
 
@@ -370,5 +264,155 @@ class BulkWrite implements Executable
         }
 
         return $options;
+    }
+
+    /**
+     * @param array[] $operations
+     * @return array[]
+     */
+    private function validateOperations(array $operations, ?DocumentCodec $codec): array
+    {
+        foreach ($operations as $i => $operation) {
+            if (! is_array($operation)) {
+                throw InvalidArgumentException::invalidType(sprintf('$operations[%d]', $i), $operation, 'array');
+            }
+
+            if (count($operation) !== 1) {
+                throw new InvalidArgumentException(sprintf('Expected one element in $operation[%d], actually: %d', $i, count($operation)));
+            }
+
+            $type = key($operation);
+            $args = current($operation);
+
+            if (! isset($args[0]) && ! array_key_exists(0, $args)) {
+                throw new InvalidArgumentException(sprintf('Missing first argument for $operations[%d]["%s"]', $i, $type));
+            }
+
+            if (! is_document($args[0])) {
+                throw InvalidArgumentException::expectedDocumentType(sprintf('$operations[%d]["%s"][0]', $i, $type), $args[0]);
+            }
+
+            switch ($type) {
+                case self::INSERT_ONE:
+                    // $args[0] was already validated above. Since DocumentCodec::encode will always return a Document
+                    // instance, there is no need to re-validate the returned value here.
+                    if ($codec) {
+                        $operations[$i][$type][0] = $codec->encode($args[0]);
+                    }
+
+                    break;
+
+                case self::DELETE_MANY:
+                case self::DELETE_ONE:
+                    if (! isset($args[1])) {
+                        $args[1] = [];
+                    }
+
+                    if (! is_array($args[1])) {
+                        throw InvalidArgumentException::invalidType(sprintf('$operations[%d]["%s"][1]', $i, $type), $args[1], 'array');
+                    }
+
+                    $args[1]['limit'] = ($type === self::DELETE_ONE ? 1 : 0);
+
+                    if (isset($args[1]['collation']) && ! is_document($args[1]['collation'])) {
+                        throw InvalidArgumentException::expectedDocumentType(sprintf('$operations[%d]["%s"][1]["collation"]', $i, $type), $args[1]['collation']);
+                    }
+
+                    $operations[$i][$type][1] = $args[1];
+
+                    break;
+
+                case self::REPLACE_ONE:
+                    if (! isset($args[1]) && ! array_key_exists(1, $args)) {
+                        throw new InvalidArgumentException(sprintf('Missing second argument for $operations[%d]["%s"]', $i, $type));
+                    }
+
+                    if ($codec) {
+                        $operations[$i][$type][1] = $codec->encode($args[1]);
+                    }
+
+                    if (! is_document($args[1])) {
+                        throw InvalidArgumentException::expectedDocumentType(sprintf('$operations[%d]["%s"][1]', $i, $type), $args[1]);
+                    }
+
+                    // Treat empty arrays as replacement documents for BC
+                    if ($args[1] === []) {
+                        $args[1] = (object) $args[1];
+                    }
+
+                    if (is_first_key_operator($args[1])) {
+                        throw new InvalidArgumentException(sprintf('First key in $operations[%d]["%s"][1] is an update operator', $i, $type));
+                    }
+
+                    if (is_pipeline($args[1], true /* allowEmpty */)) {
+                        throw new InvalidArgumentException(sprintf('$operations[%d]["%s"][1] is an update pipeline', $i, $type));
+                    }
+
+                    if (! isset($args[2])) {
+                        $args[2] = [];
+                    }
+
+                    if (! is_array($args[2])) {
+                        throw InvalidArgumentException::invalidType(sprintf('$operations[%d]["%s"][2]', $i, $type), $args[2], 'array');
+                    }
+
+                    $args[2]['multi'] = false;
+                    $args[2] += ['upsert' => false];
+
+                    if (isset($args[2]['collation']) && ! is_document($args[2]['collation'])) {
+                        throw InvalidArgumentException::expectedDocumentType(sprintf('$operations[%d]["%s"][2]["collation"]', $i, $type), $args[2]['collation']);
+                    }
+
+                    if (! is_bool($args[2]['upsert'])) {
+                        throw InvalidArgumentException::invalidType(sprintf('$operations[%d]["%s"][2]["upsert"]', $i, $type), $args[2]['upsert'], 'boolean');
+                    }
+
+                    $operations[$i][$type][2] = $args[2];
+
+                    break;
+
+                case self::UPDATE_MANY:
+                case self::UPDATE_ONE:
+                    if (! isset($args[1]) && ! array_key_exists(1, $args)) {
+                        throw new InvalidArgumentException(sprintf('Missing second argument for $operations[%d]["%s"]', $i, $type));
+                    }
+
+                    if ((! is_document($args[1]) || ! is_first_key_operator($args[1])) && ! is_pipeline($args[1])) {
+                        throw new InvalidArgumentException(sprintf('Expected update operator(s) or non-empty pipeline for $operations[%d]["%s"][1]', $i, $type));
+                    }
+
+                    if (! isset($args[2])) {
+                        $args[2] = [];
+                    }
+
+                    if (! is_array($args[2])) {
+                        throw InvalidArgumentException::invalidType(sprintf('$operations[%d]["%s"][2]', $i, $type), $args[2], 'array');
+                    }
+
+                    $args[2]['multi'] = ($type === self::UPDATE_MANY);
+                    $args[2] += ['upsert' => false];
+
+                    if (isset($args[2]['arrayFilters']) && ! is_array($args[2]['arrayFilters'])) {
+                        throw InvalidArgumentException::invalidType(sprintf('$operations[%d]["%s"][2]["arrayFilters"]', $i, $type), $args[2]['arrayFilters'], 'array');
+                    }
+
+                    if (isset($args[2]['collation']) && ! is_document($args[2]['collation'])) {
+                        throw InvalidArgumentException::expectedDocumentType(sprintf('$operations[%d]["%s"][2]["collation"]', $i, $type), $args[2]['collation']);
+                    }
+
+                    if (! is_bool($args[2]['upsert'])) {
+                        throw InvalidArgumentException::invalidType(sprintf('$operations[%d]["%s"][2]["upsert"]', $i, $type), $args[2]['upsert'], 'boolean');
+                    }
+
+                    $operations[$i][$type][2] = $args[2];
+
+                    break;
+
+                default:
+                    throw new InvalidArgumentException(sprintf('Unknown operation type "%s" in $operations[%d]', $type, $i));
+            }
+        }
+
+        return $operations;
     }
 }

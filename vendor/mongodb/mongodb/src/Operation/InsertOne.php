@@ -6,7 +6,7 @@
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *   https://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -17,6 +17,7 @@
 
 namespace MongoDB\Operation;
 
+use MongoDB\Codec\DocumentCodec;
 use MongoDB\Driver\BulkWrite as Bulk;
 use MongoDB\Driver\Exception\RuntimeException as DriverRuntimeException;
 use MongoDB\Driver\Server;
@@ -26,30 +27,25 @@ use MongoDB\Exception\InvalidArgumentException;
 use MongoDB\Exception\UnsupportedException;
 use MongoDB\InsertOneResult;
 
-use function is_array;
 use function is_bool;
-use function is_object;
+use function MongoDB\is_document;
 
 /**
  * Operation for inserting a single document with the insert command.
  *
- * @api
  * @see \MongoDB\Collection::insertOne()
- * @see http://docs.mongodb.org/manual/reference/command/insert/
+ * @see https://mongodb.com/docs/manual/reference/command/insert/
  */
 class InsertOne implements Executable
 {
-    /** @var string */
-    private $databaseName;
+    private string $databaseName;
 
-    /** @var string */
-    private $collectionName;
+    private string $collectionName;
 
     /** @var array|object */
     private $document;
 
-    /** @var array */
-    private $options;
+    private array $options;
 
     /**
      * Constructs an insert command.
@@ -58,6 +54,13 @@ class InsertOne implements Executable
      *
      *  * bypassDocumentValidation (boolean): If true, allows the write to
      *    circumvent document level validation.
+     *
+     *  * codec (MongoDB\Codec\DocumentCodec): Codec used to encode PHP objects
+     *    into BSON.
+     *
+     *  * comment (mixed): BSON value to attach as a comment to this command.
+     *
+     *    This is not supported for servers versions < 4.4.
      *
      *  * session (MongoDB\Driver\Session): Client session.
      *
@@ -69,14 +72,14 @@ class InsertOne implements Executable
      * @param array        $options        Command options
      * @throws InvalidArgumentException for parameter/option parsing errors
      */
-    public function __construct($databaseName, $collectionName, $document, array $options = [])
+    public function __construct(string $databaseName, string $collectionName, $document, array $options = [])
     {
-        if (! is_array($document) && ! is_object($document)) {
-            throw InvalidArgumentException::invalidType('$document', $document, 'array or object');
-        }
-
         if (isset($options['bypassDocumentValidation']) && ! is_bool($options['bypassDocumentValidation'])) {
             throw InvalidArgumentException::invalidType('"bypassDocumentValidation" option', $options['bypassDocumentValidation'], 'boolean');
+        }
+
+        if (isset($options['codec']) && ! $options['codec'] instanceof DocumentCodec) {
+            throw InvalidArgumentException::invalidType('"codec" option', $options['codec'], DocumentCodec::class);
         }
 
         if (isset($options['session']) && ! $options['session'] instanceof Session) {
@@ -95,9 +98,9 @@ class InsertOne implements Executable
             unset($options['writeConcern']);
         }
 
-        $this->databaseName = (string) $databaseName;
-        $this->collectionName = (string) $collectionName;
-        $this->document = $document;
+        $this->databaseName = $databaseName;
+        $this->collectionName = $collectionName;
+        $this->document = $this->validateDocument($document, $options['codec'] ?? null);
         $this->options = $options;
     }
 
@@ -105,7 +108,6 @@ class InsertOne implements Executable
      * Execute the operation.
      *
      * @see Executable::execute()
-     * @param Server $server
      * @return InsertOneResult
      * @throws UnsupportedException if write concern is used and unsupported
      * @throws DriverRuntimeException for other driver errors (e.g. connection errors)
@@ -118,6 +120,7 @@ class InsertOne implements Executable
         }
 
         $bulk = new Bulk($this->createBulkWriteOptions());
+
         $insertedId = $bulk->insert($this->document);
 
         $writeResult = $server->executeBulkWrite($this->databaseName . '.' . $this->collectionName, $bulk, $this->createExecuteOptions());
@@ -128,15 +131,16 @@ class InsertOne implements Executable
     /**
      * Create options for constructing the bulk write.
      *
-     * @see https://www.php.net/manual/en/mongodb-driver-bulkwrite.construct.php
-     * @return array
+     * @see https://php.net/manual/en/mongodb-driver-bulkwrite.construct.php
      */
-    private function createBulkWriteOptions()
+    private function createBulkWriteOptions(): array
     {
         $options = [];
 
-        if (isset($this->options['bypassDocumentValidation'])) {
-            $options['bypassDocumentValidation'] = $this->options['bypassDocumentValidation'];
+        foreach (['bypassDocumentValidation', 'comment'] as $option) {
+            if (isset($this->options[$option])) {
+                $options[$option] = $this->options[$option];
+            }
         }
 
         return $options;
@@ -145,10 +149,9 @@ class InsertOne implements Executable
     /**
      * Create options for executing the bulk write.
      *
-     * @see http://php.net/manual/en/mongodb-driver-server.executebulkwrite.php
-     * @return array
+     * @see https://php.net/manual/en/mongodb-driver-server.executebulkwrite.php
      */
-    private function createExecuteOptions()
+    private function createExecuteOptions(): array
     {
         $options = [];
 
@@ -161,5 +164,22 @@ class InsertOne implements Executable
         }
 
         return $options;
+    }
+
+    /**
+     * @param array|object $document
+     * @return array|object
+     */
+    private function validateDocument($document, ?DocumentCodec $codec)
+    {
+        if ($codec) {
+            $document = $codec->encode($document);
+        }
+
+        if (! is_document($document)) {
+            throw InvalidArgumentException::expectedDocumentType('$document', $document);
+        }
+
+        return $document;
     }
 }

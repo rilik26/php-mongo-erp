@@ -6,7 +6,7 @@
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *   https://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -26,6 +26,7 @@ use MongoDB\Exception\InvalidArgumentException;
 use MongoDB\Exception\UnsupportedException;
 use MongoDB\Model\IndexInput;
 
+use function array_is_list;
 use function array_map;
 use function is_array;
 use function is_integer;
@@ -36,32 +37,31 @@ use function sprintf;
 /**
  * Operation for the createIndexes command.
  *
- * @api
  * @see \MongoDB\Collection::createIndex()
  * @see \MongoDB\Collection::createIndexes()
- * @see http://docs.mongodb.org/manual/reference/command/createIndexes/
+ * @see https://mongodb.com/docs/manual/reference/command/createIndexes/
  */
 class CreateIndexes implements Executable
 {
-    /** @var integer */
-    private static $wireVersionForCommitQuorum = 9;
+    private const WIRE_VERSION_FOR_COMMIT_QUORUM = 9;
 
-    /** @var string */
-    private $databaseName;
+    private string $databaseName;
 
-    /** @var string */
-    private $collectionName;
+    private string $collectionName;
 
-    /** @var array */
-    private $indexes = [];
+    /** @var list<IndexInput> */
+    private array $indexes = [];
 
-    /** @var array */
-    private $options = [];
+    private array $options = [];
 
     /**
      * Constructs a createIndexes command.
      *
      * Supported options:
+     *
+     *  * comment (mixed): BSON value to attach as a comment to this command.
+     *
+     *    This is not supported for servers versions < 4.4.
      *
      *  * commitQuorum (integer|string): Specifies how many data-bearing members
      *    of a replica set, including the primary, must complete the index
@@ -80,26 +80,22 @@ class CreateIndexes implements Executable
      * @param array   $options        Command options
      * @throws InvalidArgumentException for parameter/option parsing errors
      */
-    public function __construct($databaseName, $collectionName, array $indexes, array $options = [])
+    public function __construct(string $databaseName, string $collectionName, array $indexes, array $options = [])
     {
         if (empty($indexes)) {
             throw new InvalidArgumentException('$indexes is empty');
         }
 
-        $expectedIndex = 0;
+        if (! array_is_list($indexes)) {
+            throw new InvalidArgumentException('$indexes is not a list');
+        }
 
         foreach ($indexes as $i => $index) {
-            if ($i !== $expectedIndex) {
-                throw new InvalidArgumentException(sprintf('$indexes is not a list (unexpected index: "%s")', $i));
-            }
-
             if (! is_array($index)) {
                 throw InvalidArgumentException::invalidType(sprintf('$index[%d]', $i), $index, 'array');
             }
 
             $this->indexes[] = new IndexInput($index);
-
-            $expectedIndex += 1;
         }
 
         if (isset($options['commitQuorum']) && ! is_string($options['commitQuorum']) && ! is_integer($options['commitQuorum'])) {
@@ -122,8 +118,8 @@ class CreateIndexes implements Executable
             unset($options['writeConcern']);
         }
 
-        $this->databaseName = (string) $databaseName;
-        $this->collectionName = (string) $collectionName;
+        $this->databaseName = $databaseName;
+        $this->collectionName = $collectionName;
         $this->options = $options;
     }
 
@@ -131,7 +127,6 @@ class CreateIndexes implements Executable
      * Execute the operation.
      *
      * @see Executable::execute()
-     * @param Server $server
      * @return string[] The names of the created indexes
      * @throws UnsupportedException if write concern is used and unsupported
      * @throws DriverRuntimeException for other driver errors (e.g. connection errors)
@@ -145,18 +140,18 @@ class CreateIndexes implements Executable
 
         $this->executeCommand($server);
 
-        return array_map(function (IndexInput $index) {
-            return (string) $index;
-        }, $this->indexes);
+        return array_map(
+            'strval',
+            $this->indexes,
+        );
     }
 
     /**
      * Create options for executing the command.
      *
-     * @see http://php.net/manual/en/mongodb-driver-server.executewritecommand.php
-     * @return array
+     * @see https://php.net/manual/en/mongodb-driver-server.executewritecommand.php
      */
-    private function createOptions()
+    private function createOptions(): array
     {
         $options = [];
 
@@ -175,10 +170,9 @@ class CreateIndexes implements Executable
      * Create one or more indexes for the collection using the createIndexes
      * command.
      *
-     * @param Server $server
      * @throws DriverRuntimeException for other driver errors (e.g. connection errors)
      */
-    private function executeCommand(Server $server)
+    private function executeCommand(Server $server): void
     {
         $cmd = [
             'createIndexes' => $this->collectionName,
@@ -188,15 +182,17 @@ class CreateIndexes implements Executable
         if (isset($this->options['commitQuorum'])) {
             /* Drivers MUST manually raise an error if this option is specified
              * when creating an index on a pre 4.4 server. */
-            if (! server_supports_feature($server, self::$wireVersionForCommitQuorum)) {
+            if (! server_supports_feature($server, self::WIRE_VERSION_FOR_COMMIT_QUORUM)) {
                 throw UnsupportedException::commitQuorumNotSupported();
             }
 
             $cmd['commitQuorum'] = $this->options['commitQuorum'];
         }
 
-        if (isset($this->options['maxTimeMS'])) {
-            $cmd['maxTimeMS'] = $this->options['maxTimeMS'];
+        foreach (['comment', 'maxTimeMS'] as $option) {
+            if (isset($this->options[$option])) {
+                $cmd[$option] = $this->options[$option];
+            }
         }
 
         $server->executeWriteCommand($this->databaseName, new Command($cmd), $this->createOptions());
