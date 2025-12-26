@@ -29,7 +29,7 @@ return [
     'SNAP01E', 
     'LOCK01T', 
     'SNAPSEQ01E',
-
+    'LOCK01E',
     
     
 

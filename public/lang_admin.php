@@ -46,6 +46,25 @@ try {
 $ctx = Context::get();
 require_perm('lang.manage');
 
+require_once __DIR__ . '/../core/lock/LockRepository.php';
+require_once __DIR__ . '/../core/lock/LockManager.php';
+
+$lockRes = LockManager::acquire(
+    [
+        'module' => 'i18n',
+        'doc_type' => 'LANG01T',
+        'doc_id' => 'DICT',
+        'doc_no' => 'LANG01T-DICT',
+        'doc_title' => 'Language Dictionary',
+    ],
+    900,
+    'editing'
+);
+
+$lockDenied = (isset($lockRes['acquired']) && $lockRes['acquired'] === false);
+$lockInfo = $lockRes['lock'] ?? null;
+
+
 // VIEW log + event
 $viewLogId = ActionLogger::info('I18N.ADMIN.VIEW', [
     'source' => 'public/lang_admin.php'
@@ -182,7 +201,13 @@ $pivot = LANG01TRepository::listPivot($langCodes, $q, 800);
 <?php require_once __DIR__ . '/../app/views/layout/header.php'; ?>
 
 <h3><?php _e('lang.admin.title'); ?></h3>
-
+<?php if (!empty($lockDenied)): ?>
+  <div style="padding:10px; border:1px solid #f5c2c7; background:#f8d7da; color:#842029; border-radius:8px; margin:10px 0;">
+    Bu ekran şu an başka bir kullanıcı tarafından kilitli:
+    <strong><?php echo htmlspecialchars($lockInfo['context']['username'] ?? 'unknown'); ?></strong>
+    (<?php echo htmlspecialchars($lockInfo['status'] ?? 'editing'); ?>)
+  </div>
+<?php endif; ?>
 <?php if ($msgKey): ?><p style="color:green;"><?php _e($msgKey); ?></p><?php endif; ?>
 <?php if ($errKey): ?><p style="color:red;"><?php _e($errKey); ?></p><?php endif; ?>
 
@@ -248,6 +273,142 @@ $pivot = LANG01TRepository::listPivot($langCodes, $q, 800);
     <button class="btn btn-primary" type="submit"><?php _e('lang.admin.save'); ?></button>
   </div>
 </form>
+<script>
+(function(){
+  // 60sn'de bir TTL uzat (renew)
+  const EVERY_MS = 60 * 1000;
 
+  function refreshLock(){
+    const params = new URLSearchParams();
+    params.set('module','i18n');
+    params.set('doc_type','LANG01T');
+    params.set('doc_id','DICT');
+    params.set('status','editing');
+    params.set('ttl','900');
+    params.set('doc_no','LANG01T-DICT');
+    params.set('doc_title','Language Dictionary');
+
+    fetch('/php-mongo-erp/public/api/lock_refresh.php', {
+      method: 'POST',
+      headers: {'Content-Type':'application/x-www-form-urlencoded'},
+      body: params.toString()
+    }).then(r=>r.json()).then(j=>{
+      // Eğer acquired false dönerse, lock başka kullanıcıya geçmiş demektir (nadir).
+      // İstersen burada ekrana uyarı basarız.
+      // console.log('refresh', j);
+    }).catch(()=>{});
+  }
+
+  // ilk açılışta 1 kere, sonra interval
+  refreshLock();
+  setInterval(refreshLock, EVERY_MS);
+})();
+</script>
+
+<script>
+(function(){
+  function releaseLock(){
+    try{
+      const params = new URLSearchParams();
+      params.set('module','i18n');
+      params.set('doc_type','LANG01T');
+      params.set('doc_id','DICT');
+
+      // sendBeacon POST yapar
+      navigator.sendBeacon('/php-mongo-erp/public/api/lock_release.php', params);
+    }catch(e){}
+  }
+
+  window.addEventListener('beforeunload', releaseLock);
+})();
+</script>
+<script>
+(function(){
+  const module = "i18n";
+  const docType = "LANG01T";
+  const docId = "DICT";
+
+  const acquireUrl = `/php-mongo-erp/public/api/lock_acquire.php?module=${encodeURIComponent(module)}&doc_type=${encodeURIComponent(docType)}&doc_id=${encodeURIComponent(docId)}&status=editing&ttl=900&doc_no=${encodeURIComponent("LANG01T-DICT")}&doc_title=${encodeURIComponent("Language Dictionary")}`;
+  const touchUrl   = `/php-mongo-erp/public/api/lock_touch.php?module=${encodeURIComponent(module)}&doc_type=${encodeURIComponent(docType)}&doc_id=${encodeURIComponent(docId)}&ttl=900&status=editing`;
+  const releaseUrl = `/php-mongo-erp/public/api/lock_release.php?module=${encodeURIComponent(module)}&doc_type=${encodeURIComponent(docType)}&doc_id=${encodeURIComponent(docId)}`;
+
+  let acquired = false;
+  let touchTimer = null;
+
+  function stopTouch(){
+    if (touchTimer) clearInterval(touchTimer);
+    touchTimer = null;
+  }
+
+  function startTouch(){
+    stopTouch();
+    touchTimer = setInterval(() => {
+      fetch(touchUrl, { method:'GET', credentials:'same-origin' }).catch(()=>{});
+    }, 30000);
+  }
+
+  function showLockedBy(lock){
+    const u = lock?.context?.username || 'unknown';
+    const st = lock?.status || 'editing';
+   const until = lock?.expires_at?.tr || lock?.expires_at?.iso || '';
+    alert(`Bu evrak şu anda kilitli.\nKişi: ${u}\nDurum: ${st}\nBitiş: ${until}`);
+  }
+
+  fetch(acquireUrl, { method:'GET', credentials:'same-origin' })
+    .then(r => r.json())
+    .then(res => {
+      if (!res.ok) throw new Error(res.error || 'lock_acquire_failed');
+
+      if (res.acquired) {
+        acquired = true;
+        startTouch();
+        return;
+      }
+
+      // acquired değilse: kilitli
+      showLockedBy(res.lock);
+      // Bu sayfada kalmasını istemiyorsan:
+      // window.location.href = '/php-mongo-erp/public/index.php';
+    })
+    .catch(err => {
+      console.warn('lock acquire error', err);
+    });
+
+  // Sayfa kapanırken release (sendBeacon)
+  window.addEventListener('beforeunload', function(){
+    stopTouch();
+    if (!acquired) return;
+
+    try {
+      if (navigator.sendBeacon) {
+        navigator.sendBeacon(releaseUrl);
+      } else {
+        // fallback (best-effort)
+        fetch(releaseUrl, { method:'GET', keepalive:true, credentials:'same-origin' }).catch(()=>{});
+      }
+    } catch (e) {}
+  });
+})();
+</script>
+// bu sayfanın target_key’i
+$targetKey = 'i18n|LANG01T|DICT|'
+  . ($ctx['CDEF01_id'] ?? 'null') . '|'
+  . ($ctx['period_id'] ?? 'null') . '|'
+  . ($ctx['facility_id'] ?? 'null');
+?>
+
+<script>
+(function(){
+  const TARGET_KEY = <?= json_encode($targetKey) ?>;
+  if(!TARGET_KEY) return;
+
+  window.addEventListener('storage', function(ev){
+    if(ev.key === 'lock_release:'+TARGET_KEY){
+      alert('Bu evrağın kilidi bırakıldı. Güvenli sayfaya yönlendiriliyorsunuz.');
+      window.location.href = '/php-mongo-erp/public/index.php';
+    }
+  });
+})();
+</script>
 </body>
 </html>
