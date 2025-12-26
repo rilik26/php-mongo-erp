@@ -1,19 +1,14 @@
 <?php
 /**
- * public/lang_admin.php
+ * public/lang_admin.php (FINAL)
  *
- * AMAÇ:
- * - TR & EN aynı tabloda yan yana
- * - Toplu kaydet (bulk upsert)
- * - Cache invalidation için LANG01E.version++ (tr/en)
- *
- * GUARD:
- * - login şart (context)
- * - permission: lang.manage
+ * - TR/EN pivot edit
+ * - bulk upsert
+ * - bump version (tr/en)
  *
  * AUDIT:
  * - UACT01E log: I18N.ADMIN.VIEW / I18N.ADMIN.SAVE
- * - EVENT01E event: I18N.ADMIN.VIEW / I18N.ADMIN.SAVE (+ data.summary)
+ * - EVENT01E event: I18N.ADMIN.VIEW / I18N.ADMIN.SAVE
  * - SNAP01E snapshot: LANG01T dictionary (FINAL STATE)
  */
 
@@ -28,15 +23,14 @@ require_once __DIR__ . '/../core/action/ActionLogger.php';
 require_once __DIR__ . '/../core/event/EventWriter.php';
 require_once __DIR__ . '/../core/snapshot/SnapshotWriter.php';
 
-require_once __DIR__ . '/../core/snapshot/SnapshotRepository.php';
-require_once __DIR__ . '/../core/snapshot/SnapshotDiff.php';
-
 require_once __DIR__ . '/../app/modules/lang/LANG01ERepository.php';
 require_once __DIR__ . '/../app/modules/lang/LANG01TRepository.php';
 
+require_once __DIR__ . '/../core/snapshot/SnapshotRepository.php';
+require_once __DIR__ . '/../core/snapshot/SnapshotDiff.php';
+
 SessionManager::start();
 
-// Eğer session context yoksa direkt login
 if (!isset($_SESSION['context']) || !is_array($_SESSION['context'])) {
     header('Location: /php-mongo-erp/public/login.php');
     exit;
@@ -50,12 +44,10 @@ try {
 }
 
 $ctx = Context::get();
-
-// Permission guard (403)
 require_perm('lang.manage');
 
-// ✅ VIEW: Log + Event
-ActionLogger::info('I18N.ADMIN.VIEW', [
+// VIEW log + event
+$viewLogId = ActionLogger::info('I18N.ADMIN.VIEW', [
     'source' => 'public/lang_admin.php'
 ], $ctx);
 
@@ -63,7 +55,8 @@ EventWriter::emit(
     'I18N.ADMIN.VIEW',
     ['source' => 'public/lang_admin.php'],
     ['module' => 'i18n', 'doc_type' => 'LANG01T', 'doc_id' => 'DICT'],
-    $ctx
+    $ctx,
+    ['log_id' => $viewLogId]
 );
 
 $langCodes = ['tr', 'en'];
@@ -85,21 +78,18 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         LANG01ERepository::bumpVersion('tr');
         LANG01ERepository::bumpVersion('en');
 
-        // ✅ SAVE: Log
-        ActionLogger::success('I18N.ADMIN.SAVE', [
+        // SAVE log
+        $saveLogId = ActionLogger::success('I18N.ADMIN.SAVE', [
             'source' => 'public/lang_admin.php',
             'rows'   => count($rows)
         ], $ctx);
 
-        /**
-         * ✅ SNAPSHOT: FINAL STATE (DB’den çek)
-         */
+        // ✅ Snapshot FINAL STATE (DB’den dump)
         $dictTr = LANG01TRepository::dumpAll('tr'); // key => [module,key,text]
         $dictEn = LANG01TRepository::dumpAll('en');
 
         $finalRows = [];
         $keys = array_unique(array_merge(array_keys($dictTr), array_keys($dictEn)));
-
         foreach ($keys as $k) {
             $finalRows[$k] = [
                 'module' => $dictTr[$k]['module'] ?? ($dictEn[$k]['module'] ?? 'common'),
@@ -124,50 +114,33 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 'reason'         => 'bulk_upsert',
                 'changed_fields' => ['rows'],
                 'rows_count'     => count($rows),
-            ],
-            [
-                // ✅ i18n period bağımsız olsun:
-                'period_id'   => 'GLOBAL',
-                'facility_id' => null,
             ]
         );
 
-        /**
-         * ✅ Diff + Summary (Event data.summary içine)
-         * SnapshotWriter prev_snapshot_id döndürmediği için version-1 ile prev buluyoruz.
-         */
-        $summary = [
-            'mode' => 'lang',
-            'note' => 'no_prev_snapshot'
-        ];
+        // ✅ Diff summary (Event.data.summary)
+        $diff = null;
+        $summary = ['note' => 'no_prev_snapshot'];
 
-        $targetKey = $snap['target_key'] ?? null;
-        $ver = (int)($snap['version'] ?? 1);
-        $prevVer = $ver - 1;
-
-        if ($targetKey && $prevVer >= 1) {
-            $prevSnap = SnapshotRepository::findByTargetKeyAndVersion($targetKey, $prevVer);
+        if (!empty($snap['prev_snapshot_id'])) {
+            $prevSnap = SnapshotRepository::findById($snap['prev_snapshot_id']);
             if ($prevSnap) {
                 $oldRows = (array)($prevSnap['data']['rows'] ?? []);
                 $newRows = (array)($finalRows ?? []);
-
                 $diff = SnapshotDiff::diffLangRows($oldRows, $newRows);
                 $summary = SnapshotDiff::summarizeLangDiff($diff, 8);
+                $summary['mode'] = 'lang';
             }
         }
 
-        // ✅ EVENT: summary data içine
+        // ✅ Event: refs temiz, summary data’da
         EventWriter::emit(
             'I18N.ADMIN.SAVE',
             [
                 'source'  => 'public/lang_admin.php',
                 'rows'    => count($rows),
                 'summary' => $summary,
-                 'debug'   => [
-                'target_key' => $snap['target_key'] ?? null,
-                'version'    => $snap['version'] ?? null,
-                'prev_ver'   => $prevVer ?? null,
-              ]
+                // debug istersen:
+                // 'diff' => $diff,
             ],
             [
                 'module'   => 'i18n',
@@ -176,10 +149,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             ],
             $ctx,
             [
-                'snapshot_id'  => $snap['snapshot_id'] ?? null,
-                'target_key'   => $snap['target_key'] ?? null,
-                'version'      => $ver,
-                'prev_version' => $prevVer >= 1 ? $prevVer : null,
+                'log_id'           => $saveLogId,
+                'snapshot_id'      => $snap['snapshot_id'],
+                'prev_snapshot_id' => $snap['prev_snapshot_id'] ?? null,
             ]
         );
 

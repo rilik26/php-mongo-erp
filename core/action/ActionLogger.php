@@ -2,7 +2,7 @@
 /**
  * core/action/ActionLogger.php
  *
- * LOG STANDARD (V1)
+ * LOG STANDARD (V1 - FINAL)
  * - action_code: string (örn AUTH.LOGIN, PERM.DENY, I18N.ADMIN.VIEW)
  * - result: success|fail|deny|info
  * - context: user/company/period/facility/session
@@ -30,18 +30,16 @@ final class ActionLogger
         string $result = 'info',
         array $metaOverride = []
     ): string {
-        // Context topla (Context::get veya session fallback)
+        // Context topla
         $context = self::resolveContext();
 
-        // Override (login/fail/deny gibi durumlar)
+        // Override + whitelist
         if (!empty($overrideContext)) {
             $context = array_merge($context, $overrideContext);
-
-            // override sonrası tekrar whitelist uygula
             $context = self::normalizeContext($context);
         }
 
-        // Meta (client)
+        // Meta
         $meta = [
             'ip'         => $_SERVER['REMOTE_ADDR'] ?? null,
             'user_agent' => $_SERVER['HTTP_USER_AGENT'] ?? null,
@@ -55,7 +53,6 @@ final class ActionLogger
         $target = self::normalizeTarget($target);
 
         $doc = [
-            // Standard
             'action_code' => $actionCode,
             'result'      => $result,
             'created_at'  => new UTCDateTime(),
@@ -66,7 +63,7 @@ final class ActionLogger
 
             'payload'     => $payload,
 
-            // Backward compatible flat fields
+            // backward compatible flat fields
             'UDEF01_id'   => $context['UDEF01_id'] ?? null,
             'username'    => $context['username'] ?? null,
             'CDEF01_id'   => $context['CDEF01_id'] ?? null,
@@ -75,7 +72,6 @@ final class ActionLogger
             'role'        => $context['role'] ?? null,
             'session_id'  => $context['session_id'] ?? null,
 
-            // eski alanlar (istersen kalsın)
             'ip'          => $meta['ip'] ?? null,
             'user_agent'  => $meta['user_agent'] ?? null,
         ];
@@ -84,9 +80,6 @@ final class ActionLogger
         return (string)$res->getInsertedId();
     }
 
-    /**
-     * Kısa kullanım yardımcıları
-     */
     public static function info(string $actionCode, array $payload = [], array $ctx = [], array $target = []): string
     {
         return self::log($actionCode, $payload, $ctx, $target, 'info');
@@ -107,19 +100,12 @@ final class ActionLogger
         return self::log($actionCode, $payload, $ctx, $target, 'deny');
     }
 
-    /**
-     * Context çözümleme: Context sınıfı varsa kullan, yoksa session context
-     */
     private static function resolveContext(): array
     {
         $ctx = [];
 
         if (class_exists('Context')) {
-            try {
-                $ctx = Context::get();
-            } catch (Throwable $e) {
-                $ctx = [];
-            }
+            try { $ctx = Context::get(); } catch (Throwable $e) { $ctx = []; }
         }
 
         if (empty($ctx) && isset($_SESSION['context']) && is_array($_SESSION['context'])) {
@@ -142,9 +128,6 @@ final class ActionLogger
         ];
     }
 
-    /**
-     * Target normalize
-     */
     private static function normalizeTarget(array $t): array
     {
         if (empty($t)) return [];
@@ -159,9 +142,6 @@ final class ActionLogger
         return $out;
     }
 
-    /**
-     * request_id üretimi (V1): aynı request içinde aynı kalsın
-     */
     private static function requestId(): string
     {
         if (!empty($_SERVER['HTTP_X_REQUEST_ID'])) {

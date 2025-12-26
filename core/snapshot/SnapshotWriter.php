@@ -4,35 +4,18 @@
  *
  * SNAPSHOT STANDARD (V1)
  * - SNAP01E: evrakın tam hali (versioned)
- * - SNAPSEQ01E: atomic version counter (race-safe)
- * - hash chain: prev_hash + data => hash (sha256)
+ * - SNAPSEQ01E: atomic version counter
+ * - hash chain: prev_hash + data => sha256
  *
- * Amaç:
- * - Evrak V1 -> V2 -> V3 sakla
- * - Sonradan karşılaştırılabilir olsun
- * - Timeline/Audit için temel
+ * ÖNEMLİ:
+ * - Üst seviye module/doc_type/doc_id alanları eklendi (index + query kolaylığı)
+ * - prev_snapshot_id alana yazılır
  */
 
 use MongoDB\BSON\UTCDateTime;
 
 final class SnapshotWriter
 {
-    /**
-     * Snapshot üretir.
-     *
-     * @param array $target  module/doc_type/doc_id/doc_no/doc_date
-     * @param array $data    evrakın tam hali
-     * @param array $summary reason / changed_fields vb.
-     * @param array $ctxOverride context override (opsiyonel)
-     * @return array [
-     *   'snapshot_id'=>string,
-     *   'version'=>int,
-     *   'hash'=>string,
-     *   'prev_hash'=>?string,
-     *   'prev_snapshot_id'=>?string,
-     *   'target_key'=>string
-     * ]
-     */
     public static function capture(
         array $target,
         array $data,
@@ -50,7 +33,7 @@ final class SnapshotWriter
         $target = self::normalizeTarget($target);
         $targetKey = self::targetKey($target, $ctx);
 
-        // prev snapshot (hash chain + id chain)
+        // prev snapshot (hash chain)
         $prev = MongoManager::collection('SNAP01E')->findOne(
             ['target_key' => $targetKey],
             [
@@ -72,12 +55,15 @@ final class SnapshotWriter
             'target_key' => $targetKey,
             'target'     => $target,
 
+            // ✅ flat alanlar (index uyumu + hızlı filtre)
+            'module'     => $target['module'] ?? null,
+            'doc_type'   => $target['doc_type'] ?? null,
+            'doc_id'     => $target['doc_id'] ?? null,
+
             'version'    => (int)$version,
 
             'hash'       => $hash,
             'prev_hash'  => $prevHash,
-
-            // ✅ id zinciri (timeline için çok iyi)
             'prev_snapshot_id' => $prevSnapshotId,
 
             'context'    => $ctx,
@@ -99,9 +85,6 @@ final class SnapshotWriter
         ];
     }
 
-    /**
-     * Atomic version counter
-     */
     private static function nextVersion(string $targetKey): int
     {
         $res = MongoManager::collection('SNAPSEQ01E')->findOneAndUpdate(
@@ -114,9 +97,6 @@ final class SnapshotWriter
         return (int)$seq;
     }
 
-    /**
-     * Hash = sha256(canonical_json({prev_hash, target_key, version, data}))
-     */
     private static function computeHash(?string $prevHash, string $targetKey, int $version, array $data): string
     {
         $payload = [
@@ -140,9 +120,6 @@ final class SnapshotWriter
         ksort($arr);
     }
 
-    /**
-     * Context (ip/user_agent yok)
-     */
     private static function resolveContext(): array
     {
         $ctx = [];
@@ -175,9 +152,6 @@ final class SnapshotWriter
         ];
     }
 
-    /**
-     * Target normalize
-     */
     private static function normalizeTarget(array $t): array
     {
         $out = [];
@@ -190,7 +164,6 @@ final class SnapshotWriter
     }
 
     /**
-     * Aynı evrakı tenant bazlı ayıran anahtar:
      * module|doc_type|doc_id|CDEF01_id|period_id|facility_id
      */
     private static function targetKey(array $target, array $ctx): string

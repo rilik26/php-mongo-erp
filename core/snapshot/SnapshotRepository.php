@@ -1,46 +1,10 @@
 <?php
 /**
  * core/snapshot/SnapshotRepository.php
- *
- * Basit snapshot okuma helper’ları (V1)
  */
-
-use MongoDB\Model\BSONDocument;
 
 final class SnapshotRepository
 {
-    /**
-     * BSONDocument -> array normalize
-     */
-    private static function toArray($doc): ?array
-    {
-        if (!$doc) return null;
-
-        // findOne BSONDocument döner
-        if ($doc instanceof BSONDocument) {
-            $doc = $doc->getArrayCopy();
-        }
-
-        // nested BSONDocument varsa (data/target/context) onları da array'a çevir
-        foreach (['target','context','data','summary','meta','refs'] as $k) {
-            if (isset($doc[$k]) && $doc[$k] instanceof BSONDocument) {
-                $doc[$k] = $doc[$k]->getArrayCopy();
-            }
-        }
-
-        // _id string olsun
-        if (isset($doc['_id'])) {
-            $doc['_id'] = (string)$doc['_id'];
-        }
-
-        // prev_snapshot_id string olsun
-        if (isset($doc['prev_snapshot_id']) && $doc['prev_snapshot_id']) {
-            $doc['prev_snapshot_id'] = (string)$doc['prev_snapshot_id'];
-        }
-
-        return $doc;
-    }
-
     public static function findById(string $id): ?array
     {
         try {
@@ -50,20 +14,7 @@ final class SnapshotRepository
         }
 
         $doc = MongoManager::collection('SNAP01E')->findOne(['_id' => $oid]);
-        return self::toArray($doc);
-    }
-
-    /**
-     * ✅ Sende patlayan metod bu: lang_admin.php bunu çağırıyor
-     */
-    public static function findByTargetKeyAndVersion(string $targetKey, int $version): ?array
-    {
-        $doc = MongoManager::collection('SNAP01E')->findOne([
-            'target_key' => $targetKey,
-            'version'    => (int)$version
-        ]);
-
-        return self::toArray($doc);
+        return $doc ? $doc->getArrayCopy() : null;
     }
 
     public static function findLatestByTargetKey(string $targetKey): ?array
@@ -72,38 +23,41 @@ final class SnapshotRepository
             ['target_key' => $targetKey],
             ['sort' => ['version' => -1]]
         );
-
-        return self::toArray($doc);
+        return $doc ? $doc->getArrayCopy() : null;
     }
 
-    public static function findPrevByTargetKey(string $targetKey, int $currentVersion): ?array
+    public static function findByTargetKeyAndVersion(string $targetKey, int $version): ?array
     {
-        $doc = MongoManager::collection('SNAP01E')->findOne(
-            [
-                'target_key' => $targetKey,
-                'version'    => (int)$currentVersion - 1
-            ],
-            ['sort' => ['version' => -1]]
-        );
-
-        return self::toArray($doc);
+        $doc = MongoManager::collection('SNAP01E')->findOne([
+            'target_key' => $targetKey,
+            'version'    => (int)$version
+        ]);
+        return $doc ? $doc->getArrayCopy() : null;
     }
 
-    /**
-     * Liste: zincir (en yeni -> eski)
-     */
-    public static function listChain(string $targetKey, int $limit = 50): array
+    public static function findPrevOf(array $snapshot): ?array
     {
+        $prevId = $snapshot['prev_snapshot_id'] ?? null;
+        if (!$prevId) return null;
+        return self::findById((string)$prevId);
+    }
+
+    public static function listByTargetKey(string $targetKey, int $limit = 200): array
+    {
+        if ($limit < 10) $limit = 10;
+        if ($limit > 2000) $limit = 2000;
+
         $cur = MongoManager::collection('SNAP01E')->find(
             ['target_key' => $targetKey],
-            ['sort' => ['version' => -1], 'limit' => (int)$limit]
+            [
+                'sort' => ['version' => 1],
+                'limit' => $limit,
+                'projection' => ['data' => 0]
+            ]
         );
 
         $out = [];
-        foreach ($cur as $doc) {
-            $a = self::toArray($doc);
-            if ($a) $out[] = $a;
-        }
+        foreach ($cur as $d) $out[] = $d->getArrayCopy();
         return $out;
     }
 }
