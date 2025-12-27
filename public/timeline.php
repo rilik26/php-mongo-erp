@@ -1,17 +1,13 @@
 <?php
 /**
- * public/timeline.php
+ * public/timeline.php (FINAL)
  *
- * Timeline (V1 FINAL - UI)
+ * Timeline (UI)
  * - Event listesi kart UI
  * - TR tarih/saat formatı
- * - Filtre: event_code / username / module / doc_type / doc_id
- * - Butonlar: LOG / SNAPSHOT / DIFF (HTML view)
- * - ✅ Diff: v(prev) → v(current) gösterir
- *
- * Not:
- * - summary event.data.summary içinde
- * - snapshot_id, prev_snapshot_id, log_id => event.refs içinde
+ * - Filtreler
+ * - LOG / SNAPSHOT / DIFF (HTML view)
+ * - GENDOC kartlarında doc_no/title/status otomatik görünür
  */
 
 require_once __DIR__ . '/../core/bootstrap.php';
@@ -23,23 +19,20 @@ require_once __DIR__ . '/../core/action/ActionLogger.php';
 SessionManager::start();
 
 if (!isset($_SESSION['context']) || !is_array($_SESSION['context'])) {
-  header('Location: /php-mongo-erp/public/login.php');
-  exit;
+    header('Location: /php-mongo-erp/public/login.php');
+    exit;
 }
 
 try {
-  Context::bootFromSession();
+    Context::bootFromSession();
 } catch (ContextException $e) {
-  header('Location: /php-mongo-erp/public/login.php');
-  exit;
+    header('Location: /php-mongo-erp/public/login.php');
+    exit;
 }
 
 $ctx = Context::get();
 
-// View log
-ActionLogger::info('TIMELINE.VIEW', [
-  'source' => 'public/timeline.php'
-], $ctx);
+ActionLogger::info('TIMELINE.VIEW', ['source' => 'public/timeline.php'], $ctx);
 
 // ---- Filters ----
 $eventCode = trim($_GET['event'] ?? '');
@@ -53,142 +46,88 @@ if ($limit < 10) $limit = 10;
 if ($limit > 300) $limit = 300;
 
 // Tenant scope
-$cdef   = $ctx['CDEF01_id'] ?? null;
-$period = $ctx['period_id'] ?? null;
+$cdef     = $ctx['CDEF01_id'] ?? null;
+$period   = $ctx['period_id'] ?? null;
+$facility = $ctx['facility_id'] ?? null;
 
-// Filter build
 $filter = [];
 if ($cdef) $filter['context.CDEF01_id'] = $cdef;
 
-// Period: current + GLOBAL göster
+// Period: current + GLOBAL
 if ($period) {
-  $filter['$or'] = [
-    ['context.period_id' => $period],
-    ['context.period_id' => 'GLOBAL'],
-  ];
+    $filter['$or'] = [
+        ['context.period_id' => $period],
+        ['context.period_id' => 'GLOBAL'],
+    ];
 }
 
-if ($username !== '')  $filter['context.username'] = $username;
+if ($username !== '') $filter['context.username'] = $username;
 if ($eventCode !== '') $filter['event_code'] = $eventCode;
 
-if ($module !== '')  $filter['target.module'] = $module;
+if ($module !== '') $filter['target.module'] = $module;
 if ($docType !== '') $filter['target.doc_type'] = $docType;
-if ($docId !== '')   $filter['target.doc_id'] = $docId;
+if ($docId !== '') $filter['target.doc_id'] = $docId;
 
 $cur = MongoManager::collection('EVENT01E')->find(
-  $filter,
-  [
-    'sort'  => ['created_at' => -1],
-    'limit' => $limit,
-    'projection' => [
-      'event_code' => 1,
-      'created_at' => 1,
-      'context.username' => 1,
-      'context.UDEF01_id' => 1,
-      'target' => 1,
-      'refs' => 1,   // log_id / snapshot_id / prev_snapshot_id / request_id
-      'data' => 1,   // summary burada
+    $filter,
+    [
+        'sort'  => ['created_at' => -1],
+        'limit' => $limit,
+        'projection' => [
+            'event_code' => 1,
+            'created_at' => 1,
+            'context.username' => 1,
+            'context.UDEF01_id' => 1,
+            'target' => 1,
+            'refs' => 1,
+            'data' => 1,
+        ]
     ]
-  ]
 );
 
 $events = iterator_to_array($cur);
 
 function esc($s): string {
-  return htmlspecialchars((string)$s, ENT_QUOTES, 'UTF-8');
+    return htmlspecialchars((string)$s, ENT_QUOTES, 'UTF-8');
 }
 
-date_default_timezone_set('Europe/Istanbul');
-
 function fmt_tr($iso): string {
-  if (!$iso) return '-';
-  try {
-    $dt = new DateTime($iso);
-    return $dt->format('d.m.Y H:i:s');
-  } catch (Throwable $e) {
-    $ts = strtotime((string)$iso);
-    if ($ts !== false) return date('d.m.Y H:i:s', $ts);
-    return (string)$iso;
-  }
+    if (!$iso) return '-';
+    try {
+        $dt = new DateTime($iso);
+        // Server UTC geliyor; PHP default timezone ayarlıysa burada TR’ye göre formatlanır.
+        return $dt->format('d.m.Y H:i:s');
+    } catch (Throwable $e) {
+        return (string)$iso;
+    }
 }
 
 function bson2arr($v) {
-  if ($v instanceof MongoDB\Model\BSONDocument || $v instanceof MongoDB\Model\BSONArray) {
-    $v = $v->getArrayCopy();
-  }
-  if (is_array($v)) {
-    $out = [];
-    foreach ($v as $k => $vv) $out[$k] = bson2arr($vv);
-    return $out;
-  }
-  if ($v instanceof MongoDB\BSON\UTCDateTime) return $v->toDateTime()->format('c');
-  if ($v instanceof MongoDB\BSON\ObjectId) return (string)$v;
-  return $v;
+    if ($v instanceof MongoDB\Model\BSONDocument || $v instanceof MongoDB\Model\BSONArray) {
+        $v = $v->getArrayCopy();
+    }
+    if (is_array($v)) {
+        $out = [];
+        foreach ($v as $k => $vv) $out[$k] = bson2arr($vv);
+        return $out;
+    }
+    if ($v instanceof MongoDB\BSON\UTCDateTime) return $v->toDateTime()->format('c');
+    if ($v instanceof MongoDB\BSON\ObjectId) return (string)$v;
+    return $v;
 }
 
 $events = array_map('bson2arr', $events);
 
 function event_title(string $code): string {
-  $map = [
-    'I18N.ADMIN.SAVE' => 'Dil Yönetimi: Kaydet',
-    'I18N.ADMIN.VIEW' => 'Dil Yönetimi: Görüntüle',
-    'AUDIT.VIEW'      => 'Audit View: Görüntüle',
-    'TIMELINE.VIEW'   => 'Timeline: Görüntüle',
-    'LOCK.ACQUIRE'    => 'Lock: Alındı',
-    'LOCK.RELEASE'    => 'Lock: Bırakıldı',
-  ];
-  return $map[$code] ?? $code;
-}
-
-/**
- * ✅ Snapshot version map: eventlerden snapId/prevId topla, SNAP01E'den tek query ile çek.
- * map: [ "snapshot_id_str" => version_int ]
- */
-$snapIdsToFetch = [];
-foreach ($events as $ev) {
-  $refs = $ev['refs'] ?? [];
-  $sid  = $refs['snapshot_id'] ?? null;
-  $pid  = $refs['prev_snapshot_id'] ?? null;
-  if ($sid) $snapIdsToFetch[(string)$sid] = true;
-  if ($pid) $snapIdsToFetch[(string)$pid] = true;
-}
-
-$snapVersionMap = [];
-if (!empty($snapIdsToFetch)) {
-  $objIds = [];
-  foreach (array_keys($snapIdsToFetch) as $idStr) {
-    try {
-      $objIds[] = new MongoDB\BSON\ObjectId($idStr);
-    } catch (Throwable $e) {
-      // ignore bad ids
-    }
-  }
-
-  if (!empty($objIds)) {
-    $snapCur = MongoManager::collection('SNAP01E')->find(
-      ['_id' => ['$in' => $objIds]],
-      ['projection' => ['version' => 1]]
-    );
-
-    foreach ($snapCur as $s) {
-      if ($s instanceof MongoDB\Model\BSONDocument) $s = $s->getArrayCopy();
-      $id = $s['_id'] ?? null;
-      if ($id instanceof MongoDB\BSON\ObjectId) $id = (string)$id;
-      if ($id) $snapVersionMap[$id] = (int)($s['version'] ?? 0);
-    }
-  }
-}
-
-function diff_label(?string $prevId, ?string $snapId, array $verMap): ?string {
-  if (!$prevId || !$snapId) return null;
-
-  $pv = $verMap[$prevId] ?? null;
-  $sv = $verMap[$snapId] ?? null;
-
-  if (!$pv && !$sv) return null;
-  if ($pv && $sv) return "v{$pv} → v{$sv}";
-  if ($sv) return "→ v{$sv}";
-  return "v{$pv} →";
+    $map = [
+        'I18N.ADMIN.SAVE'   => 'Dil Yönetimi: Kaydet',
+        'I18N.ADMIN.VIEW'   => 'Dil Yönetimi: Görüntüle',
+        'AUDIT.VIEW'        => 'Audit View: Görüntüle',
+        'TIMELINE.VIEW'     => 'Timeline: Görüntüle',
+        'GENDOC.ADMIN.VIEW' => 'Genel Evrak: Görüntüle',
+        'GENDOC.ADMIN.SAVE' => 'Genel Evrak: Kaydet',
+    ];
+    return $map[$code] ?? $code;
 }
 ?>
 <!doctype html>
@@ -210,7 +149,6 @@ function diff_label(?string $prevId, ?string $snapId, array $verMap): ?string {
     }
     body{ margin:0; background:var(--bg); color:var(--text); font-family: Arial, sans-serif; }
     .wrap{ max-width:1200px; margin:0 auto; padding:18px; }
-
     h1{ margin:0 0 12px; font-size:34px; letter-spacing:.2px; }
     .sub{ color:var(--muted); font-size:13px; margin-bottom:10px; }
 
@@ -257,7 +195,6 @@ function diff_label(?string $prevId, ?string $snapId, array $verMap): ?string {
     .btn-primary{ background:var(--primary); border-color: transparent; color:#fff; }
     .btn:hover{ filter: brightness(1.05); }
     .btn:active{ transform: translateY(1px); }
-    .btn.disabled{ opacity:.45; cursor:default; pointer-events:none; }
 
     .cards{ display:flex; flex-direction:column; gap:12px; margin-top:12px; }
     .card{
@@ -266,7 +203,6 @@ function diff_label(?string $prevId, ?string $snapId, array $verMap): ?string {
       border-radius:16px;
       padding:14px 14px 12px;
     }
-
     .row1{
       display:flex;
       gap:10px;
@@ -275,7 +211,6 @@ function diff_label(?string $prevId, ?string $snapId, array $verMap): ?string {
       flex-wrap:wrap;
       margin-bottom:8px;
     }
-
     .title{
       font-size:16px;
       font-weight:bold;
@@ -284,7 +219,6 @@ function diff_label(?string $prevId, ?string $snapId, array $verMap): ?string {
       align-items:center;
       flex-wrap:wrap;
     }
-
     .code{
       font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
       background:rgba(0,0,0,.22);
@@ -294,7 +228,6 @@ function diff_label(?string $prevId, ?string $snapId, array $verMap): ?string {
       color:rgba(231,234,243,.95);
       font-size:12px;
     }
-
     .meta{
       color:var(--muted);
       font-size:13px;
@@ -303,7 +236,6 @@ function diff_label(?string $prevId, ?string $snapId, array $verMap): ?string {
       align-items:center;
       flex-wrap:wrap;
     }
-
     .chips{ display:flex; gap:8px; flex-wrap:wrap; margin-top:8px; }
     .chip{
       background:var(--chip);
@@ -313,7 +245,6 @@ function diff_label(?string $prevId, ?string $snapId, array $verMap): ?string {
       font-size:12px;
       color:rgba(231,234,243,.95);
     }
-
     .grid2{
       display:grid;
       grid-template-columns: 1fr 1fr;
@@ -321,7 +252,6 @@ function diff_label(?string $prevId, ?string $snapId, array $verMap): ?string {
       margin-top:10px;
     }
     @media (max-width: 980px){ .grid2{ grid-template-columns: 1fr; } }
-
     .box{
       background:rgba(0,0,0,.14);
       border:1px solid var(--border);
@@ -332,26 +262,11 @@ function diff_label(?string $prevId, ?string $snapId, array $verMap): ?string {
     .box h4{ margin:0 0 8px; font-size:13px; color:rgba(231,234,243,.9); }
     .kv{ font-size:12px; color:var(--muted); line-height:1.55; }
     .kv b{ color:rgba(231,234,243,.95); font-weight:600; }
-
     .actions{
       display:flex;
       gap:8px;
       flex-wrap:wrap;
       margin-top:10px;
-      align-items:center;
-    }
-
-    .diffTag{
-      display:inline-flex;
-      align-items:center;
-      gap:6px;
-      padding:6px 10px;
-      border-radius:999px;
-      border:1px solid var(--border);
-      background:rgba(0,0,0,.18);
-      color:rgba(231,234,243,.92);
-      font-size:12px;
-      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
     }
   </style>
 </head>
@@ -367,11 +282,11 @@ function diff_label(?string $prevId, ?string $snapId, array $verMap): ?string {
   </div>
 
   <form method="GET" class="bar">
-    <input class="in" name="event"    value="<?php echo esc($eventCode); ?>" placeholder="event_code (örn: I18N.ADMIN.SAVE)">
+    <input class="in" name="event"    value="<?php echo esc($eventCode); ?>" placeholder="event_code (örn: GENDOC.ADMIN.SAVE)">
     <input class="in" name="user"     value="<?php echo esc($username); ?>"  placeholder="username (örn: admin)">
-    <input class="in" name="module"   value="<?php echo esc($module); ?>"    placeholder="module (örn: i18n)">
-    <input class="in" name="doc_type" value="<?php echo esc($docType); ?>"   placeholder="doc_type (örn: LANG01T)">
-    <input class="in" name="doc_id"   value="<?php echo esc($docId); ?>"     placeholder="doc_id (örn: DICT)">
+    <input class="in" name="module"   value="<?php echo esc($module); ?>"    placeholder="module (örn: gendoc)">
+    <input class="in" name="doc_type" value="<?php echo esc($docType); ?>"   placeholder="doc_type (örn: GENDOC01E)">
+    <input class="in" name="doc_id"   value="<?php echo esc($docId); ?>"     placeholder="doc_id">
     <button class="btn btn-primary" type="submit">Getir</button>
     <a class="btn" href="/php-mongo-erp/public/timeline.php">Sıfırla</a>
     <input type="hidden" name="limit" value="<?php echo (int)$limit; ?>">
@@ -387,7 +302,6 @@ function diff_label(?string $prevId, ?string $snapId, array $verMap): ?string {
       $tIso = (string)($ev['created_at'] ?? '');
       $tTr  = fmt_tr($tIso);
       $user = (string)($ev['context']['username'] ?? '');
-
       $target = $ev['target'] ?? [];
       $refs   = $ev['refs'] ?? [];
       $data   = $ev['data'] ?? [];
@@ -401,20 +315,29 @@ function diff_label(?string $prevId, ?string $snapId, array $verMap): ?string {
       $tMod = $target['module'] ?? '-';
       $tDt  = $target['doc_type'] ?? '-';
       $tDi  = $target['doc_id'] ?? '-';
-      $tNo  = $target['doc_no'] ?? null;
 
-      $logViewUrl  = $logId  ? ('/php-mongo-erp/public/log_view.php?log_id=' . urlencode($logId)) : null;
-      $snapViewUrl = $snapId ? ('/php-mongo-erp/public/snapshot_view.php?snapshot_id=' . urlencode($snapId)) : null;
-      $diffViewUrl = ($snapId && $prevId) ? ('/php-mongo-erp/public/snapshot_diff_view.php?snapshot_id=' . urlencode($snapId)) : null;
+      // ✅ GENDOC otomatik alanlar
+      $autoDocNo = is_array($sum) ? (string)($sum['doc_no'] ?? '') : '';
+      $autoTitle = is_array($sum) ? (string)($sum['title'] ?? '') : '';
+      $autoStatus= is_array($sum) ? (string)($sum['status'] ?? '') : '';
 
-      $diffLbl = diff_label($prevId ? (string)$prevId : null, $snapId ? (string)$snapId : null, $snapVersionMap);
+      // target’ta doc_no varsa onu tercih et
+      $tDocNo = (string)($target['doc_no'] ?? '');
+      if ($tDocNo === '' && $autoDocNo !== '') $tDocNo = $autoDocNo;
     ?>
       <div class="card">
         <div class="row1">
           <div class="title">
             <?php echo esc(event_title($code)); ?>
             <span class="code"><?php echo esc($code); ?></span>
+
+            <?php if (strpos($code, 'GENDOC.') === 0 && ($tDocNo !== '' || $autoTitle !== '' || $autoStatus !== '')): ?>
+              <span class="code"><?php echo esc($tDocNo !== '' ? $tDocNo : ''); ?></span>
+              <?php if ($autoStatus !== ''): ?><span class="code"><?php echo esc($autoStatus); ?></span><?php endif; ?>
+              <?php if ($autoTitle !== ''): ?><span class="code"><?php echo esc($autoTitle); ?></span><?php endif; ?>
+            <?php endif; ?>
           </div>
+
           <div class="meta">
             <span><?php echo esc($tTr); ?></span>
             <span>—</span>
@@ -426,8 +349,11 @@ function diff_label(?string $prevId, ?string $snapId, array $verMap): ?string {
           <span class="chip">module: <b><?php echo esc($tMod); ?></b></span>
           <span class="chip">doc_type: <b><?php echo esc($tDt); ?></b></span>
           <span class="chip">doc_id: <b><?php echo esc($tDi); ?></b></span>
-          <?php if ($tNo): ?>
-            <span class="chip">doc_no: <b><?php echo esc($tNo); ?></b></span>
+
+          <?php if (strpos($code, 'GENDOC.') === 0): ?>
+            <?php if ($tDocNo !== ''): ?><span class="chip">doc_no: <b><?php echo esc($tDocNo); ?></b></span><?php endif; ?>
+            <?php if ($autoStatus !== ''): ?><span class="chip">status: <b><?php echo esc($autoStatus); ?></b></span><?php endif; ?>
+            <?php if ($autoTitle !== ''): ?><span class="chip">title: <b><?php echo esc($autoTitle); ?></b></span><?php endif; ?>
           <?php endif; ?>
         </div>
 
@@ -459,25 +385,22 @@ function diff_label(?string $prevId, ?string $snapId, array $verMap): ?string {
         </div>
 
         <div class="actions">
-          <?php if ($logViewUrl): ?>
-            <a class="btn" target="_blank" href="<?php echo esc($logViewUrl); ?>">LOG</a>
+          <?php if ($logId): ?>
+            <a class="btn" target="_blank" href="/php-mongo-erp/public/log_view.php?log_id=<?php echo urlencode($logId); ?>">LOG</a>
           <?php else: ?>
-            <span class="btn disabled">LOG</span>
+            <span class="btn" style="opacity:.45; cursor:default;">LOG</span>
           <?php endif; ?>
 
-          <?php if ($snapViewUrl): ?>
-            <a class="btn" target="_blank" href="<?php echo esc($snapViewUrl); ?>">SNAPSHOT</a>
+          <?php if ($snapId): ?>
+            <a class="btn" target="_blank" href="/php-mongo-erp/public/snapshot_view.php?snapshot_id=<?php echo urlencode($snapId); ?>">SNAPSHOT</a>
           <?php else: ?>
-            <span class="btn disabled">SNAPSHOT</span>
+            <span class="btn" style="opacity:.45; cursor:default;">SNAPSHOT</span>
           <?php endif; ?>
 
-          <?php if ($diffViewUrl): ?>
-            <a class="btn" target="_blank" href="<?php echo esc($diffViewUrl); ?>">DIFF</a>
-            <?php if ($diffLbl): ?>
-              <span class="diffTag"><?php echo esc($diffLbl); ?></span>
-            <?php endif; ?>
+          <?php if ($snapId && $prevId): ?>
+            <a class="btn" target="_blank" href="/php-mongo-erp/public/snapshot_diff_view.php?snapshot_id=<?php echo urlencode($snapId); ?>">DIFF</a>
           <?php else: ?>
-            <span class="btn disabled">DIFF</span>
+            <span class="btn" style="opacity:.45; cursor:default;">DIFF</span>
           <?php endif; ?>
         </div>
       </div>

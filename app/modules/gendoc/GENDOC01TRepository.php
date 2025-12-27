@@ -1,66 +1,22 @@
 <?php
 /**
- * app/modules/gendoc/GENDOC01TRepository.php
+ * app/modules/gendoc/GENDOC01TRepository.php (FINAL)
  *
- * Body / Payload için.
- * İster versionlı tut, ister latest-only. Biz versionlı tutuyoruz.
+ * GENDOC Body Versions
+ * - unique: (target_key, version)
+ * - insertVersion: insertOne ile yazar (upsert değil!)
+ * - latestByTargetKey: son versiyonu getirir
  */
-
-require_once __DIR__ . '/../../../core/doc/TargetKey.php';
 
 final class GENDOC01TRepository
 {
-    public static function insertVersion(array $ctx, array $target, array $data): array
+    public static function collectionName(): string { return 'GENDOC01T'; }
+
+    public static function latestByTargetKey(string $targetKey): ?array
     {
-        $targetKey = TargetKey::build($target, $ctx);
+        if ($targetKey === '') return null;
 
-        $latest = MongoManager::collection('GENDOC01T')->findOne(
-            ['target_key' => $targetKey],
-            ['sort' => ['version' => -1], 'projection' => ['version' => 1]]
-        );
-
-        $nextVer = 1;
-        if ($latest && isset($latest['version'])) $nextVer = ((int)$latest['version']) + 1;
-
-        $now = new MongoDB\BSON\UTCDateTime();
-
-        $doc = [
-            'target_key' => $targetKey,
-            'target' => [
-                'module' => (string)($target['module'] ?? ''),
-                'doc_type' => (string)($target['doc_type'] ?? ''),
-                'doc_id' => (string)($target['doc_id'] ?? ''),
-                'doc_no' => $target['doc_no'] ?? null,
-                'doc_title' => $target['doc_title'] ?? null,
-            ],
-            'context' => [
-                'CDEF01_id' => $ctx['CDEF01_id'] ?? null,
-                'period_id' => $ctx['period_id'] ?? null,
-                'facility_id' => $ctx['facility_id'] ?? null,
-                'UDEF01_id' => $ctx['UDEF01_id'] ?? null,
-                'username' => $ctx['username'] ?? null,
-                'session_id' => $ctx['session_id'] ?? session_id(),
-            ],
-            'version' => $nextVer,
-            'created_at' => $now,
-            'data' => $data,
-        ];
-
-        $res = MongoManager::collection('GENDOC01T')->insertOne($doc);
-
-        return [
-            'ok' => true,
-            'id' => (string)$res->getInsertedId(),
-            'target_key' => $targetKey,
-            'version' => $nextVer,
-        ];
-    }
-
-    public static function findLatestByTarget(array $ctx, array $target): ?array
-    {
-        $targetKey = TargetKey::build($target, $ctx);
-
-        $doc = MongoManager::collection('GENDOC01T')->findOne(
+        $doc = MongoManager::collection(self::collectionName())->findOne(
             ['target_key' => $targetKey],
             ['sort' => ['version' => -1]]
         );
@@ -68,5 +24,51 @@ final class GENDOC01TRepository
         if (!$doc) return null;
         if ($doc instanceof MongoDB\Model\BSONDocument) $doc = $doc->getArrayCopy();
         return $doc;
+    }
+
+    /**
+     * Version insert (V1→V2→V3)
+     * $metaTarget: module/doc_type/doc_id + doc_no/doc_title/status
+     */
+    public static function insertVersion(string $targetKey, int $version, array $body, array $ctx, array $metaTarget = []): array
+    {
+        if ($targetKey === '') throw new InvalidArgumentException('target_key required');
+        if ($version <= 0) throw new InvalidArgumentException('version must be >= 1');
+
+        $now = new MongoDB\BSON\UTCDateTime((int)floor(microtime(true) * 1000));
+
+        $doc = [
+            'target_key' => $targetKey,
+            'version'    => $version,
+            'body'       => $body,
+            'context'    => [
+                'CDEF01_id'   => $ctx['CDEF01_id'] ?? null,
+                'period_id'   => $ctx['period_id'] ?? null,
+                'facility_id' => $ctx['facility_id'] ?? null,
+                'UDEF01_id'   => $ctx['UDEF01_id'] ?? null,
+                'username'    => $ctx['username'] ?? null,
+                'role'        => $ctx['role'] ?? null,
+                'session_id'  => $ctx['session_id'] ?? session_id(),
+                'ip'          => $ctx['ip'] ?? ($_SERVER['REMOTE_ADDR'] ?? null),
+                'user_agent'  => $ctx['user_agent'] ?? ($_SERVER['HTTP_USER_AGENT'] ?? null),
+            ],
+            'target' => [
+                'module'    => $metaTarget['module'] ?? null,
+                'doc_type'  => $metaTarget['doc_type'] ?? null,
+                'doc_id'    => $metaTarget['doc_id'] ?? null,
+                'doc_no'    => $metaTarget['doc_no'] ?? null,
+                'doc_title' => $metaTarget['doc_title'] ?? null,
+                'status'    => $metaTarget['status'] ?? null,
+            ],
+            'created_at' => $now,
+        ];
+
+        $res = MongoManager::collection(self::collectionName())->insertOne($doc);
+
+        return [
+            'ok' => true,
+            'inserted_id' => (string)$res->getInsertedId(),
+            'version' => $version,
+        ];
     }
 }

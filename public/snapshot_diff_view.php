@@ -2,13 +2,11 @@
 /**
  * public/snapshot_diff_view.php (FINAL)
  *
- * GET:
- *  ?snapshot_id=...
- *
- * - Hangi versiyon? (current)
- * - Prev / Next / Latest gezinti
- * - LANG ise: changed_keys tablosu
- * - GENEL ise: flatten path bazlı Added/Removed/Changed tablosu
+ * - Snapshot diff HTML view
+ * - BSONDocument -> array fix (TypeError çözümü)
+ * - Prev/Next diff navigation (target_key + version ile)
+ * - Lang rows özel detay diff (tr/en from->to)
+ * - Genel data için added/removed/changed diff (nested)
  */
 
 require_once __DIR__ . '/../core/bootstrap.php';
@@ -16,6 +14,7 @@ require_once __DIR__ . '/../core/auth/SessionManager.php';
 require_once __DIR__ . '/../core/base/Context.php';
 require_once __DIR__ . '/../core/base/ContextException.php';
 require_once __DIR__ . '/../core/action/ActionLogger.php';
+
 require_once __DIR__ . '/../core/snapshot/SnapshotDiff.php';
 
 SessionManager::start();
@@ -33,119 +32,62 @@ try {
 }
 
 $ctx = Context::get();
-ActionLogger::info('SNAPSHOT.DIFF.VIEW', ['source' => 'public/snapshot_diff_view.php'], $ctx);
 
-date_default_timezone_set('Europe/Istanbul');
+ActionLogger::info('SNAPSHOT.DIFF.VIEW', [
+  'source' => 'public/snapshot_diff_view.php'
+], $ctx);
 
 function esc($s): string { return htmlspecialchars((string)$s, ENT_QUOTES, 'UTF-8'); }
 
-function fmt_tr_dt($iso): string {
-  if (!$iso) return '-';
-  try { return (new DateTime((string)$iso))->format('d.m.Y H:i:s'); }
-  catch (Throwable $e) { return (string)$iso; }
-}
-
 function bson_to_array($v) {
-  if ($v instanceof MongoDB\Model\BSONDocument || $v instanceof MongoDB\Model\BSONArray) $v = $v->getArrayCopy();
+  if ($v instanceof MongoDB\Model\BSONDocument || $v instanceof MongoDB\Model\BSONArray) {
+    $v = $v->getArrayCopy();
+  }
+  if ($v instanceof MongoDB\BSON\UTCDateTime) return $v->toDateTime()->format('c');
+  if ($v instanceof MongoDB\BSON\ObjectId) return (string)$v;
   if (is_array($v)) {
     $out = [];
     foreach ($v as $k => $vv) $out[$k] = bson_to_array($vv);
     return $out;
   }
-  if ($v instanceof MongoDB\BSON\UTCDateTime) return $v->toDateTime()->format('c');
-  if ($v instanceof MongoDB\BSON\ObjectId) return (string)$v;
   return $v;
 }
 
-function find_snapshot_by_id(string $id): ?array {
-  try { $oid = new MongoDB\BSON\ObjectId($id); }
-  catch (Throwable $e) { return null; }
+function fmt_tr($iso): string {
+  if (!$iso) return '-';
+  try {
+    $dt = new DateTime((string)$iso);
+    $dt->setTimezone(new DateTimeZone('Europe/Istanbul'));
+    return $dt->format('d.m.Y H:i:s');
+  } catch(Throwable $e) {
+    return (string)$iso;
+  }
+}
 
+function find_snapshot_by_id(string $id): ?array {
+  try {
+    $oid = new MongoDB\BSON\ObjectId($id);
+  } catch(Throwable $e) {
+    return null;
+  }
   $doc = MongoManager::collection('SNAP01E')->findOne(['_id' => $oid]);
   if (!$doc) return null;
-  if ($doc instanceof MongoDB\Model\BSONDocument) $doc = $doc->getArrayCopy();
   return bson_to_array($doc);
 }
 
-function find_latest_by_target_key(string $targetKey): ?array {
+function find_snapshot_by_target_version(string $targetKey, int $version): ?array {
   $doc = MongoManager::collection('SNAP01E')->findOne(
-    ['target_key' => $targetKey],
-    ['sort' => ['version' => -1]]
-  );
-  if (!$doc) return null;
-  if ($doc instanceof MongoDB\Model\BSONDocument) $doc = $doc->getArrayCopy();
-  return bson_to_array($doc);
-}
-
-function find_next_snapshot(string $currentId, string $targetKey): ?array {
-  try { $curOid = new MongoDB\BSON\ObjectId($currentId); }
-  catch (Throwable $e) { return null; }
-
-  $doc = MongoManager::collection('SNAP01E')->findOne(
-    ['target_key' => $targetKey, 'prev_snapshot_id' => $curOid],
+    ['target_key' => $targetKey, 'version' => $version],
     ['sort' => ['version' => 1]]
   );
   if (!$doc) return null;
-  if ($doc instanceof MongoDB\Model\BSONDocument) $doc = $doc->getArrayCopy();
   return bson_to_array($doc);
 }
 
-function is_lang_snapshot(array $snap): bool {
-  return isset($snap['data']['rows']) && is_array($snap['data']['rows']);
+function json_pretty($v): string {
+  return json_encode($v, JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES|JSON_PRETTY_PRINT);
 }
 
-/**
- * GENEL DIFF flatten:
- * diffAssoc çıktısını (added/removed/changed) path bazlı tabloya çevirir.
- */
-function flatten_assoc_added_removed(array $a, string $prefix = ''): array {
-  $rows = [];
-  foreach ($a as $k => $v) {
-    $path = $prefix === '' ? (string)$k : ($prefix . '.' . $k);
-    if (is_array($v)) {
-      // leaf de olabilir ama array ise derinleşelim
-      $sub = flatten_assoc_added_removed($v, $path);
-      if (!empty($sub)) $rows = array_merge($rows, $sub);
-      else $rows[] = ['path' => $path, 'value' => json_encode($v, JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES)];
-    } else {
-      $rows[] = ['path' => $path, 'value' => (string)$v];
-    }
-  }
-  return $rows;
-}
-
-function flatten_assoc_changed(array $changed, string $prefix = ''): array {
-  $rows = [];
-  foreach ($changed as $k => $v) {
-    $path = $prefix === '' ? (string)$k : ($prefix . '.' . $k);
-
-    // leaf: ['from'=>..,'to'=>..]
-    if (is_array($v) && array_key_exists('from', $v) && array_key_exists('to', $v)) {
-      $from = is_array($v['from']) ? json_encode($v['from'], JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES) : (string)$v['from'];
-      $to   = is_array($v['to'])   ? json_encode($v['to'], JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES) : (string)$v['to'];
-      $rows[] = ['path' => $path, 'from' => $from, 'to' => $to];
-      continue;
-    }
-
-    // nested diff: ['added'=>..,'removed'=>..,'changed'=>..] olabilir
-    if (is_array($v) && (isset($v['added']) || isset($v['removed']) || isset($v['changed']))) {
-      $subChanged = isset($v['changed']) && is_array($v['changed']) ? $v['changed'] : [];
-      $sub = flatten_assoc_changed($subChanged, $path);
-      if (!empty($sub)) $rows = array_merge($rows, $sub);
-      continue;
-    }
-
-    // fallback: unknown structure
-    $rows[] = [
-      'path' => $path,
-      'from' => '(?)',
-      'to'   => is_array($v) ? json_encode($v, JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES) : (string)$v
-    ];
-  }
-  return $rows;
-}
-
-// ---- Input ----
 $snapshotId = trim($_GET['snapshot_id'] ?? '');
 if ($snapshotId === '') {
   http_response_code(400);
@@ -153,58 +95,45 @@ if ($snapshotId === '') {
   exit;
 }
 
-$current = find_snapshot_by_id($snapshotId);
-if (!$current) {
+$snap = find_snapshot_by_id($snapshotId);
+if (!$snap) {
   http_response_code(404);
   echo "snapshot not found";
   exit;
 }
 
-$targetKey = (string)($current['target_key'] ?? '');
-$prevId = isset($current['prev_snapshot_id']) ? (string)$current['prev_snapshot_id'] : '';
-$prev = $prevId ? find_snapshot_by_id($prevId) : null;
+$prevId = (string)($snap['prev_snapshot_id'] ?? '');
+$prevSnap = $prevId ? find_snapshot_by_id($prevId) : null;
 
-$next = ($targetKey && $snapshotId) ? find_next_snapshot($snapshotId, $targetKey) : null;
-$latestSnap = $targetKey ? find_latest_by_target_key($targetKey) : null;
+$targetKey = (string)($snap['target_key'] ?? '');
+$ver = (int)($snap['version'] ?? 0);
 
-$mode = (is_lang_snapshot($current) && $prev && is_lang_snapshot($prev)) ? 'lang' : 'generic';
+// prev/next navigation by version (daha sağlam)
+$prevByVer = ($targetKey && $ver > 1) ? find_snapshot_by_target_version($targetKey, $ver - 1) : null;
+$nextByVer = ($targetKey && $ver > 0) ? find_snapshot_by_target_version($targetKey, $ver + 1) : null;
 
-$diff = null;
-$summary = null;
-$note = null;
+// diff hesapla
+$oldData = $prevSnap['data'] ?? [];
+$newData = $snap['data'] ?? [];
+$oldData = is_array($oldData) ? $oldData : bson_to_array($oldData);
+$newData = is_array($newData) ? $newData : bson_to_array($newData);
 
-if (!$prev) {
-  $note = 'no_prev_snapshot';
-} else {
-  if ($mode === 'lang') {
-    $oldRows = (array)($prev['data']['rows'] ?? []);
-    $newRows = (array)($current['data']['rows'] ?? []);
-    $diff = SnapshotDiff::diffLangRows($oldRows, $newRows);
-    $summary = SnapshotDiff::summarizeLangDiff($diff, 12);
-    $summary['mode'] = 'lang';
-  } else {
-    $oldData = (array)($prev['data'] ?? []);
-    $newData = (array)($current['data'] ?? []);
-    $diff = SnapshotDiff::diffAssoc($oldData, $newData);
-    $summary = [
-      'mode' => 'generic',
-      'added_count'   => isset($diff['added']) ? count($diff['added']) : 0,
-      'removed_count' => isset($diff['removed']) ? count($diff['removed']) : 0,
-      'changed_count' => isset($diff['changed']) ? count($diff['changed']) : 0,
-    ];
-  }
+$isLang = false;
+if (isset($oldData['rows']) || isset($newData['rows'])) {
+  // lang sözlüğü formatı: data.rows[key] = {tr,en,...}
+  $isLang = true;
 }
 
-$currentVersion = (int)($current['version'] ?? 0);
-$prevVersion = $prev ? (int)($prev['version'] ?? 0) : null;
-$latestVersion = $latestSnap ? (int)($latestSnap['version'] ?? 0) : null;
+$langDiff = null;
+$genDiff  = null;
 
-$target = (array)($current['target'] ?? []);
-$docModule = (string)($target['module'] ?? '-');
-$docType   = (string)($target['doc_type'] ?? '-');
-$docId     = (string)($target['doc_id'] ?? '-');
-$docNo     = (string)($target['doc_no'] ?? '');
-$docTitle  = (string)($target['doc_title'] ?? '');
+if ($isLang) {
+  $oldRows = isset($oldData['rows']) ? (array)bson_to_array($oldData['rows']) : [];
+  $newRows = isset($newData['rows']) ? (array)bson_to_array($newData['rows']) : [];
+  $langDiff = SnapshotDiff::diffLangRows($oldRows, $newRows);
+} else {
+  $genDiff = SnapshotDiff::diffAssoc((array)$oldData, (array)$newData);
+}
 
 ?>
 <!doctype html>
@@ -214,245 +143,228 @@ $docTitle  = (string)($target['doc_title'] ?? '');
   <title>Snapshot Diff</title>
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <style>
-    body{ font-family: Arial, sans-serif; background:#0f1222; color:#e7eaf3; margin:0; }
-    .wrap{ max-width: 1200px; margin: 0 auto; padding: 16px; }
-    .card{ background:#1b2040; border:1px solid rgba(255,255,255,.10); border-radius:14px; padding:14px; margin:10px 0; }
-    .top{ display:flex; justify-content:space-between; gap:12px; align-items:flex-start; flex-wrap:wrap; }
-    .h{ font-size:20px; font-weight:800; margin:0 0 6px; }
-    .sub{ color: rgba(231,234,243,.70); font-size:13px; }
-    .code{ font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono","Courier New", monospace; }
-    .pill{ display:inline-flex; gap:8px; align-items:center; padding:6px 10px; border-radius:999px; background:rgba(255,255,255,.07); border:1px solid rgba(255,255,255,.10); font-size:12px; }
-    .bar{ display:flex; gap:10px; flex-wrap:wrap; margin-top:10px; }
+    body{ font-family: Arial, sans-serif; margin:0; background:#0f1220; color:#e8ebf6; }
+    .wrap{ max-width:1200px; margin:0 auto; padding:16px; }
+    .topbar{ display:flex; gap:10px; align-items:center; flex-wrap:wrap; margin-bottom:12px; }
     .btn{
-      display:inline-flex; align-items:center; justify-content:center;
-      padding:9px 12px; border-radius:10px;
-      border:1px solid rgba(255,255,255,.14);
-      color:#e7eaf3; text-decoration:none;
-      background: rgba(255,255,255,.04);
-      cursor:pointer;
-      white-space:nowrap;
+      padding:8px 12px; border-radius:10px; border:1px solid rgba(255,255,255,.12);
+      background:transparent; color:#e8ebf6; text-decoration:none; cursor:pointer;
+      display:inline-flex; gap:8px; align-items:center;
     }
     .btn:hover{ filter:brightness(1.05); }
-    .btn-primary{ background:#5865f2; border-color: transparent; color:white; }
+    .btn-primary{ background:#5865f2; border-color:transparent; color:#fff; }
+    .btn-dim{ opacity:.55; pointer-events:none; }
+    .h1{ font-size:22px; font-weight:800; margin:0 0 6px; }
+    .muted{ color:rgba(232,235,246,.65); font-size:13px; }
+    .card{
+      background:#171a2c; border:1px solid rgba(255,255,255,.10);
+      border-radius:16px; padding:14px; margin-top:12px;
+    }
     .grid{ display:grid; grid-template-columns: 1fr 1fr; gap:12px; }
-    @media(max-width: 980px){ .grid{ grid-template-columns: 1fr; } }
-    table{ width:100%; border-collapse:collapse; }
-    th, td{ border:1px solid rgba(255,255,255,.12); padding:8px; vertical-align:top; }
-    th{ background: rgba(255,255,255,.06); text-align:left; font-size:12px; color: rgba(231,234,243,.9); }
-    td{ font-size:13px; color: rgba(231,234,243,.92); }
-    .muted{ color: rgba(231,234,243,.65); }
-    pre{ margin:0; white-space:pre-wrap; word-break:break-word; background: rgba(0,0,0,.22); padding:10px; border-radius:12px; border:1px solid rgba(255,255,255,.10); }
-    .k{ font-weight:700; }
-    .section-title{ margin:0 0 8px; font-size:15px; font-weight:800; }
+    @media (max-width: 980px){ .grid{ grid-template-columns: 1fr; } }
+    .code{
+      font-family: ui-monospace, Menlo, Consolas, monospace;
+      background:rgba(0,0,0,.25); border:1px solid rgba(255,255,255,.10);
+      padding:2px 8px; border-radius:999px; font-size:12px;
+    }
+    .kv{ font-size:13px; line-height:1.6; color:rgba(232,235,246,.80); }
+    .kv b{ color:#fff; font-weight:700; }
+    table{ border-collapse:collapse; width:100%; }
+    th,td{ border:1px solid rgba(255,255,255,.12); padding:8px; vertical-align:top; }
+    th{ background:rgba(255,255,255,.06); text-align:left; }
+    .small{ font-size:12px; color:rgba(232,235,246,.70); }
+    details{ margin-top:8px; }
+    pre{ margin:0; white-space:pre-wrap; word-break:break-word; color:#e8ebf6; }
   </style>
 </head>
 <body>
-
 <div class="wrap">
 
-  <?php require_once __DIR__ . '/../app/views/layout/header.php'; ?>
+  <div class="topbar">
+    <a class="btn" href="/php-mongo-erp/public/timeline.php">← Timeline</a>
 
-  <div class="card">
-    <div class="top">
-      <div>
-        <div class="h">Snapshot Diff</div>
-        <div class="sub">
-          Target:
-          <span class="code"><?php echo esc($docModule); ?></span> /
-          <span class="code"><?php echo esc($docType); ?></span> /
-          <span class="code"><?php echo esc($docId); ?></span>
-          <?php if ($docNo !== ''): ?> &nbsp; | doc_no: <span class="code"><?php echo esc($docNo); ?></span><?php endif; ?>
-          <?php if ($docTitle !== ''): ?> &nbsp; | title: <b><?php echo esc($docTitle); ?></b><?php endif; ?>
-        </div>
+    <?php if ($prevByVer && !empty($prevByVer['_id'])): ?>
+      <a class="btn" href="/php-mongo-erp/public/snapshot_diff_view.php?snapshot_id=<?php echo esc($prevByVer['_id']); ?>">← Önceki Diff</a>
+    <?php else: ?>
+      <span class="btn btn-dim">← Önceki Diff</span>
+    <?php endif; ?>
 
-        <div class="sub" style="margin-top:6px;">
-          <span class="pill">Mode: <b><?php echo esc($mode); ?></b></span>
-          <span class="pill">Current: <b>v<?php echo (int)$currentVersion; ?></b></span>
-          <span class="pill">Prev: <b><?php echo $prevVersion !== null ? ('v'.(int)$prevVersion) : '-'; ?></b></span>
-          <span class="pill">Latest: <b><?php echo $latestVersion !== null ? ('v'.(int)$latestVersion) : '-'; ?></b></span>
-        </div>
+    <?php if ($nextByVer && !empty($nextByVer['_id'])): ?>
+      <a class="btn" href="/php-mongo-erp/public/snapshot_diff_view.php?snapshot_id=<?php echo esc($nextByVer['_id']); ?>">Sonraki Diff →</a>
+    <?php else: ?>
+      <span class="btn btn-dim">Sonraki Diff →</span>
+    <?php endif; ?>
 
-        <div class="sub" style="margin-top:6px;">
-          Current Snapshot: <span class="code"><?php echo esc($snapshotId); ?></span>
-          <?php if ($prevId): ?> &nbsp; | Prev Snapshot: <span class="code"><?php echo esc($prevId); ?></span><?php endif; ?>
-        </div>
+    <span style="flex:1"></span>
+
+    <a class="btn" target="_blank" href="/php-mongo-erp/public/snapshot_view.php?snapshot_id=<?php echo esc($snapshotId); ?>">Snapshot</a>
+    <?php if ($prevId): ?>
+      <a class="btn" target="_blank" href="/php-mongo-erp/public/snapshot_view.php?snapshot_id=<?php echo esc($prevId); ?>">Prev Snapshot</a>
+    <?php endif; ?>
+  </div>
+
+  <div class="h1">
+    Diff (v<?php echo (int)($prevSnap['version'] ?? 0); ?> → v<?php echo (int)$ver; ?>)
+    <span class="code"><?php echo esc($targetKey); ?></span>
+  </div>
+
+  <div class="muted">
+    Current: <span class="code"><?php echo esc($snapshotId); ?></span>
+    <?php if ($prevId): ?>
+      &nbsp;|&nbsp; Prev: <span class="code"><?php echo esc($prevId); ?></span>
+    <?php else: ?>
+      &nbsp;|&nbsp; Prev: -
+    <?php endif; ?>
+  </div>
+
+  <div class="grid">
+    <div class="card">
+      <div class="kv">
+        <div><b>Current version</b>: v<?php echo (int)$ver; ?></div>
+        <div><b>Created</b>: <?php echo esc(fmt_tr($snap['created_at'] ?? '')); ?></div>
+        <div><b>User</b>: <?php echo esc($snap['context']['username'] ?? '-'); ?></div>
+        <div><b>Hash</b>: <span class="code"><?php echo esc($snap['hash'] ?? '-'); ?></span></div>
       </div>
+    </div>
 
-      <div class="bar">
-        <?php if ($prev): ?>
-          <a class="btn" href="/php-mongo-erp/public/snapshot_diff_view.php?snapshot_id=<?php echo urlencode((string)($prev['_id'] ?? '')); ?>">⬅ Önceki</a>
-        <?php else: ?>
-          <span class="btn" style="opacity:.45; cursor:default;">⬅ Önceki</span>
-        <?php endif; ?>
-
-        <?php if ($next): ?>
-          <a class="btn" href="/php-mongo-erp/public/snapshot_diff_view.php?snapshot_id=<?php echo urlencode((string)($next['_id'] ?? '')); ?>">Sonraki ➡</a>
-        <?php else: ?>
-          <span class="btn" style="opacity:.45; cursor:default;">Sonraki ➡</span>
-        <?php endif; ?>
-
-        <?php if ($latestSnap && (string)($latestSnap['_id'] ?? '') !== $snapshotId): ?>
-          <a class="btn btn-primary" href="/php-mongo-erp/public/snapshot_diff_view.php?snapshot_id=<?php echo urlencode((string)($latestSnap['_id'] ?? '')); ?>">Latest</a>
-        <?php else: ?>
-          <span class="btn btn-primary" style="opacity:.55; cursor:default;">Latest</span>
-        <?php endif; ?>
-
-        <a class="btn" target="_blank" href="/php-mongo-erp/public/api/snapshot_get.php?snapshot_id=<?php echo urlencode($snapshotId); ?>">Snapshot JSON</a>
+    <div class="card">
+      <div class="kv">
+        <div><b>Prev version</b>: v<?php echo (int)($prevSnap['version'] ?? 0); ?></div>
+        <div><b>Created</b>: <?php echo esc(fmt_tr($prevSnap['created_at'] ?? '')); ?></div>
+        <div><b>User</b>: <?php echo esc($prevSnap['context']['username'] ?? '-'); ?></div>
+        <div><b>Hash</b>: <span class="code"><?php echo esc($prevSnap['hash'] ?? '-'); ?></span></div>
       </div>
     </div>
   </div>
 
-  <?php if ($note === 'no_prev_snapshot'): ?>
-    <div class="card">
-      <div class="section-title">Diff yok</div>
-      <div class="sub">Bu snapshot için <b>prev_snapshot_id</b> yok. Muhtemelen ilk versiyon.</div>
-    </div>
-  <?php else: ?>
+  <div class="card">
+    <h3 style="margin:0 0 10px;">Değişiklikler</h3>
 
-    <div class="grid">
-      <div class="card">
-        <div class="section-title">Zaman</div>
-        <div class="sub">Prev: <b><?php echo esc(fmt_tr_dt((string)($prev['created_at'] ?? ''))); ?></b></div>
-        <div class="sub" style="margin-top:6px;">Current: <b><?php echo esc(fmt_tr_dt((string)($current['created_at'] ?? ''))); ?></b></div>
-        <div class="sub" style="margin-top:6px;">Bu ekran: <b>v<?php echo (int)$prevVersion; ?> → v<?php echo (int)$currentVersion; ?></b></div>
-      </div>
-
-      <div class="card">
-        <div class="section-title">Özet</div>
-        <pre><?php echo esc(json_encode($summary, JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES|JSON_PRETTY_PRINT)); ?></pre>
-      </div>
-    </div>
-
-    <?php if ($mode === 'lang'): ?>
+    <?php if (!$prevSnap): ?>
+      <div class="small">Bu snapshot’ın prev’i yok. (ilk versiyon olabilir)</div>
+    <?php elseif ($isLang): ?>
       <?php
-        $added = $diff['added_keys'] ?? [];
-        $removed = $diff['removed_keys'] ?? [];
-        $changed = $diff['changed_keys'] ?? [];
+        $changed = $langDiff['changed_keys'] ?? [];
+        $added = $langDiff['added_keys'] ?? [];
+        $removed = $langDiff['removed_keys'] ?? [];
       ?>
 
-      <div class="card">
-        <div class="section-title">LANG Değişiklikleri</div>
-
-        <div class="grid" style="margin-top:10px;">
-          <div>
-            <div class="sub"><b>Added Keys</b> (<?php echo count($added); ?>)</div>
-            <pre><?php echo esc(json_encode(array_values($added), JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES|JSON_PRETTY_PRINT)); ?></pre>
-          </div>
-          <div>
-            <div class="sub"><b>Removed Keys</b> (<?php echo count($removed); ?>)</div>
-            <pre><?php echo esc(json_encode(array_values($removed), JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES|JSON_PRETTY_PRINT)); ?></pre>
-          </div>
-        </div>
-
-        <div style="margin-top:12px;">
-          <div class="sub"><b>Changed Keys</b> (<?php echo count($changed); ?>)</div>
-
-          <?php if (empty($changed)): ?>
-            <div class="sub muted">Değişiklik yok.</div>
-          <?php else: ?>
-            <table style="margin-top:8px;">
-              <tr>
-                <th style="width:280px;">Key</th>
-                <th>TR</th>
-                <th>EN</th>
-              </tr>
-              <?php foreach ($changed as $k => $langs):
-                $tr = $langs['tr'] ?? null;
-                $en = $langs['en'] ?? null;
-              ?>
-                <tr>
-                  <td class="code"><b><?php echo esc($k); ?></b></td>
-                  <td>
-                    <?php if ($tr): ?>
-                      <div class="muted"><span class="k">from:</span> <?php echo esc($tr['from'] ?? ''); ?></div>
-                      <div><span class="k">to:</span> <?php echo esc($tr['to'] ?? ''); ?></div>
-                    <?php else: ?><span class="muted">-</span><?php endif; ?>
-                  </td>
-                  <td>
-                    <?php if ($en): ?>
-                      <div class="muted"><span class="k">from:</span> <?php echo esc($en['from'] ?? ''); ?></div>
-                      <div><span class="k">to:</span> <?php echo esc($en['to'] ?? ''); ?></div>
-                    <?php else: ?><span class="muted">-</span><?php endif; ?>
-                  </td>
-                </tr>
-              <?php endforeach; ?>
-            </table>
-          <?php endif; ?>
-        </div>
+      <div class="small" style="margin-bottom:8px;">
+        Added: <b><?php echo (int)count($added); ?></b>,
+        Removed: <b><?php echo (int)count($removed); ?></b>,
+        Changed: <b><?php echo (int)count($changed); ?></b>
       </div>
+
+      <?php if (empty($added) && empty($removed) && empty($changed)): ?>
+        <div class="small">Değişiklik yok.</div>
+      <?php else: ?>
+
+        <?php if (!empty($changed)): ?>
+          <h4 style="margin:10px 0 8px;">Changed Keys</h4>
+          <table>
+            <tr>
+              <th style="width:320px;">Key</th>
+              <th>TR</th>
+              <th>EN</th>
+            </tr>
+            <?php foreach ($changed as $k => $lcDiff): ?>
+              <tr>
+                <td><span class="code"><?php echo esc($k); ?></span></td>
+                <td class="small">
+                  <?php if (!empty($lcDiff['tr'])): ?>
+                    <div><b>from</b>: <?php echo esc($lcDiff['tr']['from'] ?? ''); ?></div>
+                    <div><b>to</b>: <?php echo esc($lcDiff['tr']['to'] ?? ''); ?></div>
+                  <?php else: ?>
+                    -
+                  <?php endif; ?>
+                </td>
+                <td class="small">
+                  <?php if (!empty($lcDiff['en'])): ?>
+                    <div><b>from</b>: <?php echo esc($lcDiff['en']['from'] ?? ''); ?></div>
+                    <div><b>to</b>: <?php echo esc($lcDiff['en']['to'] ?? ''); ?></div>
+                  <?php else: ?>
+                    -
+                  <?php endif; ?>
+                </td>
+              </tr>
+            <?php endforeach; ?>
+          </table>
+        <?php endif; ?>
+
+        <?php if (!empty($added)): ?>
+          <h4 style="margin:14px 0 8px;">Added Keys</h4>
+          <div class="small"><?php echo esc(json_encode($added, JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES)); ?></div>
+        <?php endif; ?>
+
+        <?php if (!empty($removed)): ?>
+          <h4 style="margin:14px 0 8px;">Removed Keys</h4>
+          <div class="small"><?php echo esc(json_encode($removed, JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES)); ?></div>
+        <?php endif; ?>
+
+      <?php endif; ?>
 
     <?php else: ?>
       <?php
-        $addedRows = flatten_assoc_added_removed($diff['added'] ?? []);
-        $removedRows = flatten_assoc_added_removed($diff['removed'] ?? []);
-        $changedRows = flatten_assoc_changed($diff['changed'] ?? []);
+        $added = $genDiff['added'] ?? [];
+        $removed = $genDiff['removed'] ?? [];
+        $changed = $genDiff['changed'] ?? [];
       ?>
 
-      <div class="card">
-        <div class="section-title">GENEL Değişiklikler (Path Bazlı)</div>
-
-        <div style="margin-top:10px;">
-          <div class="sub"><b>Changed</b> (<?php echo count($changedRows); ?>)</div>
-          <?php if (empty($changedRows)): ?>
-            <div class="sub muted">Değişiklik yok.</div>
-          <?php else: ?>
-            <table style="margin-top:8px;">
-              <tr>
-                <th style="width:360px;">Path</th>
-                <th>From</th>
-                <th>To</th>
-              </tr>
-              <?php foreach ($changedRows as $r): ?>
-                <tr>
-                  <td class="code"><?php echo esc($r['path']); ?></td>
-                  <td class="muted"><?php echo esc($r['from']); ?></td>
-                  <td><?php echo esc($r['to']); ?></td>
-                </tr>
-              <?php endforeach; ?>
-            </table>
-          <?php endif; ?>
-        </div>
-
-        <div class="grid" style="margin-top:12px;">
-          <div>
-            <div class="sub"><b>Added</b> (<?php echo count($addedRows); ?>)</div>
-            <?php if (empty($addedRows)): ?>
-              <div class="sub muted">-</div>
-            <?php else: ?>
-              <table style="margin-top:8px;">
-                <tr><th style="width:360px;">Path</th><th>Value</th></tr>
-                <?php foreach ($addedRows as $r): ?>
-                  <tr>
-                    <td class="code"><?php echo esc($r['path']); ?></td>
-                    <td><?php echo esc($r['value']); ?></td>
-                  </tr>
-                <?php endforeach; ?>
-              </table>
-            <?php endif; ?>
-          </div>
-
-          <div>
-            <div class="sub"><b>Removed</b> (<?php echo count($removedRows); ?>)</div>
-            <?php if (empty($removedRows)): ?>
-              <div class="sub muted">-</div>
-            <?php else: ?>
-              <table style="margin-top:8px;">
-                <tr><th style="width:360px;">Path</th><th>Value</th></tr>
-                <?php foreach ($removedRows as $r): ?>
-                  <tr>
-                    <td class="code"><?php echo esc($r['path']); ?></td>
-                    <td class="muted"><?php echo esc($r['value']); ?></td>
-                  </tr>
-                <?php endforeach; ?>
-              </table>
-            <?php endif; ?>
-          </div>
-        </div>
+      <div class="small" style="margin-bottom:8px;">
+        Added: <b><?php echo (int)count($added); ?></b>,
+        Removed: <b><?php echo (int)count($removed); ?></b>,
+        Changed: <b><?php echo (int)count($changed); ?></b>
       </div>
 
-    <?php endif; ?>
+      <?php if (empty($added) && empty($removed) && empty($changed)): ?>
+        <div class="small">Değişiklik yok.</div>
+      <?php else: ?>
 
-  <?php endif; ?>
+        <?php if (!empty($changed)): ?>
+          <h4 style="margin:10px 0 8px;">Changed</h4>
+          <table>
+            <tr>
+              <th style="width:340px;">Field</th>
+              <th>From</th>
+              <th>To</th>
+            </tr>
+            <?php foreach ($changed as $k => $v): ?>
+              <tr>
+                <td><span class="code"><?php echo esc($k); ?></span></td>
+                <td class="small"><?php echo esc(is_array($v) ? json_encode($v['from'] ?? null, JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES) : ''); ?></td>
+                <td class="small"><?php echo esc(is_array($v) ? json_encode($v['to'] ?? null, JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES) : ''); ?></td>
+              </tr>
+            <?php endforeach; ?>
+          </table>
+        <?php endif; ?>
+
+        <?php if (!empty($added)): ?>
+          <h4 style="margin:14px 0 8px;">Added</h4>
+          <pre class="small"><?php echo esc(json_pretty($added)); ?></pre>
+        <?php endif; ?>
+
+        <?php if (!empty($removed)): ?>
+          <h4 style="margin:14px 0 8px;">Removed</h4>
+          <pre class="small"><?php echo esc(json_pretty($removed)); ?></pre>
+        <?php endif; ?>
+
+      <?php endif; ?>
+    <?php endif; ?>
+  </div>
+
+  <div class="card">
+    <h3 style="margin:0 0 8px;">Detay JSON (opsiyonel)</h3>
+
+    <details>
+      <summary class="small">Prev Snapshot Data</summary>
+      <pre class="small"><?php echo esc(json_pretty($oldData)); ?></pre>
+    </details>
+
+    <details>
+      <summary class="small">Current Snapshot Data</summary>
+      <pre class="small"><?php echo esc(json_pretty($newData)); ?></pre>
+    </details>
+  </div>
 
 </div>
 </body>

@@ -95,11 +95,7 @@
                     <div>docs</div>
                   </a>
                 </li>
-                <li class="menu-item">
-                  <a href="log_get_view.php" class="menu-link">
-                    <div>log_get_view</div>
-                  </a>
-                </li>
+                
                 <li class="menu-item">
                   <a href="audit_view.php" class="menu-link">
                     <div>audit_view</div>
@@ -113,6 +109,11 @@
                 <li class="menu-item">
                   <a href="gendoc_admin.php" class="menu-link">
                     <div>gendoc_admin</div>
+                  </a>
+                </li>
+                <li class="menu-item">
+                  <a href="gendoc_list.php" class="menu-link">
+                    <div>gendoc_list</div>
                   </a>
                 </li>
               </ul>

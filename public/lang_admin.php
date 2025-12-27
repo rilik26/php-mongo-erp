@@ -231,6 +231,12 @@ function h($s): string { return htmlspecialchars((string)$s, ENT_QUOTES, 'UTF-8'
       border-radius:6px !important;
       padding:4px 6px !important;
     }
+    tr.row-focus td{
+      background: #fff8e1 !important;
+    }
+    tr.row-focus td:first-child{
+      box-shadow: inset 4px 0 0 #ffb300;
+    }
   </style>
 </head>
 <body>
@@ -263,7 +269,7 @@ function h($s): string { return htmlspecialchars((string)$s, ENT_QUOTES, 'UTF-8'
 
   <table id="langTable">
     <thead>
-      <tr>
+      <tr data-doc-id="<?php echo $safeKey; ?>">
         <th style="width:44px;">🔒</th>
         <th style="width:140px;"><?php _e('lang.admin.module'); ?></th>
         <th style="width:240px;"><?php _e('lang.admin.key'); ?></th>
@@ -324,6 +330,53 @@ function h($s): string { return htmlspecialchars((string)$s, ENT_QUOTES, 'UTF-8'
   const docId   = <?php echo json_encode($lockDocId); ?>;
   const docNo   = <?php echo json_encode($lockDocNo); ?>;
   const docTitle= <?php echo json_encode($lockDocTitle); ?>;
+  const focusKey = (new URLSearchParams(window.location.search).get('q') || '').trim();
+
+  function focusRow(dt, key){
+    if (!dt || !key) return;
+
+    // row'u bul
+    let targetNode = null;
+    dt.rows().nodes().each(function(n){
+      if (!n || !n.dataset) return;
+      if ((n.dataset.docId || '') === key) targetNode = n;
+    });
+
+    if (!targetNode) return;
+
+    // highlight temizle
+    dt.rows().nodes().each(function(n){
+      if (n && n.classList) n.classList.remove('row-focus');
+    });
+
+    // ilgili sayfaya git (row index -> page)
+    const rowIndex = dt.row(targetNode).index();
+    const pageLen = dt.page.len();
+    if (pageLen > 0 && rowIndex !== undefined && rowIndex !== null) {
+      const page = Math.floor(rowIndex / pageLen);
+      if (dt.page() !== page) {
+        dt.page(page).draw('page');
+      }
+    }
+
+    // draw sonrası node yeniden DOM'a alınmış olabilir → tekrar bul
+    setTimeout(function(){
+      let node2 = null;
+      dt.rows({ page: 'current' }).nodes().each(function(n){
+        if (n && n.dataset && (n.dataset.docId || '') === key) node2 = n;
+      });
+
+      const n = node2 || targetNode;
+      if (!n) return;
+
+      n.classList.add('row-focus');
+      try{
+        n.scrollIntoView({ behavior:'smooth', block:'center' });
+      } catch(e){
+        n.scrollIntoView();
+      }
+    }, 30);
+  }
 
   let acquired = false;
 
@@ -506,9 +559,17 @@ function h($s): string { return htmlspecialchars((string)$s, ENT_QUOTES, 'UTF-8'
 
     dt.on('draw', function(){
       refreshVisibleLocks(dt);
+
+      // ✅ sayfa değişince highlight kaybolmasın
+      if (focusKey) focusRow(dt, focusKey);
     });
 
+    // initial
     refreshVisibleLocks(dt);
+
+    // ✅ ilk açılışta focus
+    if (focusKey) focusRow(dt, focusKey);
+
     return dt;
   }
 
