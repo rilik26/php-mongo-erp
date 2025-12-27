@@ -21,7 +21,8 @@
  *
  * DATATABLES:
  * - HTML tablo DataTables (paging/sort)
- * - q değişince state reset (stateSave bug fix)
+ * - q değişince state reset
+ * - visible rows için lock_status ile 🔒 ikonları
  */
 
 require_once __DIR__ . '/../core/bootstrap.php';
@@ -194,6 +195,7 @@ function h($s): string { return htmlspecialchars((string)$s, ENT_QUOTES, 'UTF-8'
     table { border-collapse: collapse; width: 100%; }
     th, td { border:1px solid #ddd; padding:8px; vertical-align: top; }
     th { background:#f7f7f7; text-align:left; }
+
     input[type="text"]{
       width:100%; box-sizing:border-box;
       background:#fff; color:#111;
@@ -217,6 +219,10 @@ function h($s): string { return htmlspecialchars((string)$s, ENT_QUOTES, 'UTF-8'
       display:inline-block; padding:3px 8px; border-radius:999px; font-size:12px;
       background:#E3F2FD; color:#1565C0; font-weight:600;
     }
+
+    .lock-cell span{ display:inline-block; width:22px; height:22px; line-height:22px; }
+    .lock-open{ opacity:.35; }
+    .lock-closed{ opacity:1; }
 
     /* DataTables küçük dokunuşlar */
     div.dataTables_wrapper .dataTables_length select,
@@ -258,6 +264,7 @@ function h($s): string { return htmlspecialchars((string)$s, ENT_QUOTES, 'UTF-8'
   <table id="langTable">
     <thead>
       <tr>
+        <th style="width:44px;">🔒</th>
         <th style="width:140px;"><?php _e('lang.admin.module'); ?></th>
         <th style="width:240px;"><?php _e('lang.admin.key'); ?></th>
         <th><?php _e('lang.admin.tr_text'); ?></th>
@@ -271,7 +278,11 @@ function h($s): string { return htmlspecialchars((string)$s, ENT_QUOTES, 'UTF-8'
         $en = (string)($row['en'] ?? '');
         $safeKey = h($key);
       ?>
-        <tr>
+        <tr data-doc-id="<?php echo $safeKey; ?>">
+          <td class="lock-cell" style="text-align:center; width:44px;">
+            <span class="lock-open" title="Kilit yok">🔓</span>
+          </td>
+
           <td>
             <input type="text"
                    name="rows[<?php echo $safeKey; ?>][module]"
@@ -401,30 +412,116 @@ function h($s): string { return htmlspecialchars((string)$s, ENT_QUOTES, 'UTF-8'
     }
   }
 
-  // --- DataTables ---
+  // ---- lock icons (row-based) ----
+  function escAttr(s){
+    return String(s ?? '').replace(/"/g, '&quot;');
+  }
+
+  function renderLockCell(cell, lock){
+    if (!cell) return;
+
+    if (!lock) {
+      cell.innerHTML = `<span class="lock-open" title="Kilit yok">🔓</span>`;
+      return;
+    }
+
+    const u = lock.username || 'unknown';
+    const st = lock.status || 'editing';
+    const ttl = (typeof lock.ttl_left_sec === 'number') ? `TTL: ${lock.ttl_left_sec}s` : '';
+    const exp = lock.expires_at || '';
+    const title = `Kilitli: ${u} (${st})\n${ttl}\nexpires: ${exp}`;
+
+    cell.innerHTML = `<span class="lock-closed" title="${escAttr(title)}">🔒</span>`;
+  }
+
+  async function refreshVisibleLocks(dt){
+    if (!dt) return;
+
+    const nodes = dt.rows({ page: 'current' }).nodes().toArray();
+    const docIds = [];
+    nodes.forEach(n => {
+      const did = n && n.dataset ? (n.dataset.docId || '') : '';
+      if (did) docIds.push(String(did));
+    });
+
+    const uniq = Array.from(new Set(docIds));
+    if (uniq.length === 0) return;
+
+    try{
+      const url = new URL('/php-mongo-erp/public/api/lock_status.php', window.location.origin);
+      const r = await fetch(url.toString(), {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: { 'Content-Type':'application/json' },
+        body: JSON.stringify({
+          module: module,
+          doc_type: docType,
+          doc_ids: uniq
+        })
+      });
+      const j = await r.json();
+      if (!j.ok) return;
+
+      nodes.forEach(n => {
+        const did = n && n.dataset ? (n.dataset.docId || '') : '';
+        const cell = n ? n.querySelector('.lock-cell') : null;
+        const lock = (did && j.locks) ? (j.locks[did] || null) : null;
+        renderLockCell(cell, lock);
+      });
+    } catch(e){
+      console.warn('lock_status failed', e);
+    }
+  }
+
+  // --- DataTables (stateSave with q) ---
   function initDataTable(){
     if (!window.jQuery || !jQuery.fn || !jQuery.fn.DataTable) return null;
 
     const currentQ = (new URLSearchParams(window.location.search).get('q') || '').trim();
-    const storageKey = 'lang_admin_last_q_v1';
-    const lastQ = (localStorage.getItem(storageKey) || '').trim();
+    const STATE_KEY = 'DT_lang_admin_state_v1';
 
-    const dt = $('#langTable').DataTable({
-      searching: false,       // ✅ server-side q
+    const dt = jQuery('#langTable').DataTable({
+      searching: false,       // server-side q
       pageLength: 50,
       lengthMenu: [[25, 50, 100, 250, -1], [25, 50, 100, 250, "All"]],
-      order: [[1, 'asc']],    // Key column
+      order: [[2, 'asc']],    // ✅ key col (lock=0, module=1, key=2)
+      columnDefs: [
+        { orderable:false, targets:[0] } // lock sütunu sortable değil
+      ],
       stateSave: true,
       autoWidth: false,
-      dom: 'lrtip'
+      dom: 'lrtip',
+
+      stateSaveCallback: function(settings, data){
+        try {
+          localStorage.setItem(STATE_KEY, JSON.stringify({
+            q: currentQ,
+            data: data
+          }));
+        } catch(e){}
+      },
+
+      stateLoadCallback: function(settings){
+        try{
+          const raw = localStorage.getItem(STATE_KEY);
+          if (!raw) return null;
+          const obj = JSON.parse(raw);
+          if (!obj || typeof obj !== 'object') return null;
+          if ((obj.q || '') !== currentQ) return null; // ✅ q değişince state yok say
+          return obj.data || null;
+        } catch(e){
+          return null;
+        }
+      }
     });
 
-    // ✅ q değiştiyse eski state'i temizle ve ilk sayfaya dön
-    if (currentQ !== lastQ) {
-      try { dt.state.clear(); } catch(e) {}
-      try { dt.page('first').draw('page'); } catch(e) {}
-      localStorage.setItem(storageKey, currentQ);
-    }
+    // her draw'da visible lock refresh
+    dt.on('draw', function(){
+      refreshVisibleLocks(dt);
+    });
+
+    // initial
+    refreshVisibleLocks(dt);
 
     return dt;
   }
@@ -434,6 +531,7 @@ function h($s): string { return htmlspecialchars((string)$s, ENT_QUOTES, 'UTF-8'
   // Start
   acquireLock();
   initDataTable();
+
 })();
 </script>
 

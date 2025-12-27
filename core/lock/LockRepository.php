@@ -2,175 +2,171 @@
 /**
  * core/lock/LockRepository.php
  *
- * LOCK01E (V1)
+ * LOCK01E
  * - target_key unique
- * - atomic acquire (findOneAndUpdate + upsert)
- * - race-safe: E11000 duplicate key yakalanır -> mevcut lock read -> acquired:false döner
+ * - active: expires_at > now
+ *
+ * Acquire mantığı (E11000 FIX):
+ * 1) target_key ile mevcut lock'u oku
+ * 2) aktif ve başkasında -> acquired=false dön
+ * 3) aktif ve bende -> TTL refresh/update -> acquired=true
+ * 4) yok veya expired -> expired ise delete -> insert new -> acquired=true
  */
 
 use MongoDB\BSON\UTCDateTime;
-use MongoDB\BSON\Regex;
-use MongoDB\Operation\FindOneAndUpdate;
+use MongoDB\BSON\ObjectId;
 
 final class LockRepository
 {
-    /**
-     * Acquire lock (atomic)
-     *
-     * Kural:
-     * - lock yoksa -> acquire
-     * - lock expired ise -> acquire
-     * - lock aynı session ise -> refresh/renew (acquired true)
-     * - lock başka session ve aktif ise -> acquired false
-     *
-     * @return array ['acquired'=>bool,'lock'=>array|null,'reason'=>string|null]
-     */
-    public static function acquire(string $targetKey, array $context, array $target, int $ttlSeconds, string $status = 'editing'): array
-    {
-        $nowMs = (int) floor(microtime(true) * 1000);
-        $nowUtc = new UTCDateTime($nowMs);
-        $expUtc = new UTCDateTime($nowMs + ($ttlSeconds * 1000));
-
-        $sessionId = (string)($context['session_id'] ?? '');
-
-        // Bu filter şunu sağlar:
-        // - Eğer doküman varsa ancak expired ise match olur
-        // - Eğer doküman varsa ve aynı session ise match olur (refresh)
-        // - Eğer doküman varsa ve başka session + aktif ise match olmaz -> upsert insert dener -> E11000 -> yakalayıp return acquired:false
-        $filter = [
-            'target_key' => $targetKey,
-            '$or' => [
-                ['expires_at' => ['$lte' => $nowUtc]],
-                ['context.session_id' => $sessionId],
-            ],
-        ];
-
-        $update = [
-            '$set' => [
-                'context'     => $context,
-                'target'      => $target,
-                'status'      => $status,
-                'locked_at'   => $nowUtc,
-                'expires_at'  => $expUtc,
-                'updated_at'  => $nowUtc,
-            ],
-            '$setOnInsert' => [
-                'target_key'  => $targetKey,
-                'created_at'  => $nowUtc,
-            ],
-        ];
-
-        $opts = [
-            'upsert' => true,
-            'returnDocument' => FindOneAndUpdate::RETURN_DOCUMENT_AFTER,
-        ];
-
-        try {
-            $doc = MongoManager::collection('LOCK01E')->findOneAndUpdate($filter, $update, $opts);
-
-            $lockArr = self::bsonToArray($doc);
-            return [
-                'acquired' => true,
-                'lock'     => $lockArr,
-                'reason'   => null,
-            ];
-
-        } catch (MongoDB\Driver\Exception\CommandException $e) {
-            // E11000 duplicate key -> başka session aktif lock tutuyor (upsert insert çakıştı)
-            if (strpos($e->getMessage(), 'E11000') !== false) {
-                $existing = MongoManager::collection('LOCK01E')->findOne(['target_key' => $targetKey]);
-                return [
-                    'acquired' => false,
-                    'lock'     => self::bsonToArray($existing),
-                    'reason'   => 'locked_by_other',
-                ];
-            }
-            throw $e;
-
-        } catch (MongoDB\Driver\Exception\BulkWriteException $e) {
-            // bazı driver sürümlerinde duplicate burada düşebilir
-            if (strpos($e->getMessage(), 'E11000') !== false) {
-                $existing = MongoManager::collection('LOCK01E')->findOne(['target_key' => $targetKey]);
-                return [
-                    'acquired' => false,
-                    'lock'     => self::bsonToArray($existing),
-                    'reason'   => 'locked_by_other',
-                ];
-            }
-            throw $e;
-        }
-    }
-
-    /**
-     * Release lock
-     * - force=false => sadece aynı session silebilir
-     * - force=true  => target_key bazlı siler
-     *
-     * @return array ['released'=>bool,'reason'=>string|null]
-     */
-    public static function release(string $targetKey, array $context, bool $force = false): array
-    {
-        $sessionId = (string)($context['session_id'] ?? '');
-
-        $filter = ['target_key' => $targetKey];
-
-        if (!$force) {
-            $filter['context.session_id'] = $sessionId;
-        }
-
-        $res = MongoManager::collection('LOCK01E')->deleteOne($filter);
-
-        if (($res->getDeletedCount() ?? 0) > 0) {
-            return ['released' => true, 'reason' => null];
-        }
-
-        return [
-            'released' => false,
-            'reason' => $force ? 'not_found' : 'not_owner_or_not_found',
-        ];
-    }
-
-    /**
-     * Find one lock by target_key
-     */
     public static function findByTargetKey(string $targetKey): ?array
     {
         $doc = MongoManager::collection('LOCK01E')->findOne(['target_key' => $targetKey]);
-        $a = self::bsonToArray($doc);
-        return $a ?: null;
+        if (!$doc) return null;
+        if ($doc instanceof MongoDB\Model\BSONDocument) $doc = $doc->getArrayCopy();
+        return self::bsonToArray($doc);
     }
 
-    /**
-     * List locks (simple)
-     */
-    public static function list(array $filter = [], array $options = []): array
+    public static function acquire(string $targetKey, array $target, array $context, int $ttlSec = 900, string $status = 'editing'): array
     {
-        $cur = MongoManager::collection('LOCK01E')->find($filter, $options);
-        $out = [];
-        foreach ($cur as $d) $out[] = self::bsonToArray($d);
-        return $out;
+        $nowMs = (int) floor(microtime(true) * 1000);
+        $nowUtc = new UTCDateTime($nowMs);
+
+        if ($ttlSec < 60) $ttlSec = 60;
+        if ($ttlSec > 7200) $ttlSec = 7200;
+
+        $expiresMs = $nowMs + ($ttlSec * 1000);
+        $expiresUtc = new UTCDateTime($expiresMs);
+
+        // 1) mevcut lock
+        $existing = MongoManager::collection('LOCK01E')->findOne(['target_key' => $targetKey]);
+
+        if ($existing instanceof MongoDB\Model\BSONDocument) $existing = $existing->getArrayCopy();
+        $existingArr = $existing ? self::bsonToArray($existing) : null;
+
+        // aktif mi?
+        $existingActive = false;
+        $existingExpMs = null;
+
+        if ($existing && isset($existing['expires_at'])) {
+            if ($existing['expires_at'] instanceof UTCDateTime) {
+                $existingExpMs = (int)$existing['expires_at']->toDateTime()->format('U') * 1000;
+            } else {
+                $ts = strtotime((string)$existing['expires_at']);
+                if ($ts !== false) $existingExpMs = $ts * 1000;
+            }
+            if ($existingExpMs !== null && $existingExpMs > $nowMs) {
+                $existingActive = true;
+            }
+        }
+
+        $mySession = (string)($context['session_id'] ?? '');
+        $lockSession = (string)($existingArr['context']['session_id'] ?? '');
+
+        // 2) aktif ve başkasında
+        if ($existingActive && $lockSession !== '' && $mySession !== '' && $lockSession !== $mySession) {
+            return [
+                'acquired' => false,
+                'lock' => $existingArr,
+            ];
+        }
+
+        // 3) aktif ve bende -> refresh
+        if ($existingActive && $lockSession !== '' && $mySession !== '' && $lockSession === $mySession) {
+            $id = $existing['_id'] ?? null;
+
+            MongoManager::collection('LOCK01E')->updateOne(
+                ['_id' => $id],
+                [
+                    '$set' => [
+                        'updated_at' => $nowUtc,
+                        'expires_at' => $expiresUtc,
+                        'status'     => $status,
+                        'target'     => self::cleanNulls($target),
+                        // context'i refresh etmiyoruz; istersen edebilirsin
+                    ]
+                ]
+            );
+
+            $fresh = self::findByTargetKey($targetKey);
+
+            return [
+                'acquired' => true,
+                'lock' => $fresh,
+            ];
+        }
+
+        // 4) expired ise sil
+        if ($existing && !$existingActive) {
+            MongoManager::collection('LOCK01E')->deleteOne(['_id' => $existing['_id']]);
+        }
+
+        // 5) insert new (unique key çakışmaz, çünkü yok/expired sildik)
+        $doc = [
+            'target_key' => $targetKey,
+            'target'     => self::cleanNulls($target),
+            'context'    => self::cleanNulls($context),
+            'status'     => $status,
+
+            'created_at' => $nowUtc,
+            'updated_at' => $nowUtc,
+            'locked_at'  => $nowUtc,
+            'expires_at' => $expiresUtc,
+        ];
+
+        $res = MongoManager::collection('LOCK01E')->insertOne($doc);
+        $newId = (string)$res->getInsertedId();
+
+        $fresh = self::findByTargetKey($targetKey);
+
+        return [
+            'acquired' => true,
+            'lock' => $fresh ?: array_merge(['_id' => $newId], self::bsonToArray($doc)),
+        ];
     }
 
-    /**
-     * helper: BSON -> array (minimal)
-     */
+    public static function release(string $targetKey, array $context, bool $force = false): array
+    {
+        $existing = MongoManager::collection('LOCK01E')->findOne(['target_key' => $targetKey]);
+        if (!$existing) {
+            return ['released' => false, 'reason' => 'not_found'];
+        }
+
+        if ($existing instanceof MongoDB\Model\BSONDocument) $existing = $existing->getArrayCopy();
+        $existingArr = self::bsonToArray($existing);
+
+        $mySession = (string)($context['session_id'] ?? '');
+        $lockSession = (string)($existingArr['context']['session_id'] ?? '');
+
+        if (!$force && $mySession !== '' && $lockSession !== '' && $mySession !== $lockSession) {
+            return ['released' => false, 'reason' => 'not_owner'];
+        }
+
+        MongoManager::collection('LOCK01E')->deleteOne(['_id' => $existing['_id']]);
+
+        return ['released' => true];
+    }
+
+    private static function cleanNulls(array $a): array
+    {
+        foreach ($a as $k => $v) {
+            if ($v === null) unset($a[$k]);
+            if (is_array($v)) $a[$k] = self::cleanNulls($v);
+        }
+        return $a;
+    }
+
     private static function bsonToArray($v)
     {
-        if ($v === null) return null;
-
         if ($v instanceof MongoDB\Model\BSONDocument || $v instanceof MongoDB\Model\BSONArray) {
             $v = $v->getArrayCopy();
         }
-
         if (is_array($v)) {
             $out = [];
             foreach ($v as $k => $vv) $out[$k] = self::bsonToArray($vv);
             return $out;
         }
-
-        if ($v instanceof MongoDB\BSON\UTCDateTime) return $v->toDateTime()->format('c');
-        if ($v instanceof MongoDB\BSON\ObjectId) return (string)$v;
-
+        if ($v instanceof UTCDateTime) return $v->toDateTime()->format('c');
+        if ($v instanceof ObjectId) return (string)$v;
         return $v;
     }
 }

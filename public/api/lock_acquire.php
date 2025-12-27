@@ -6,14 +6,16 @@
  *  &status=editing|viewing|approving
  *  &ttl=900
  *  &doc_no=...&doc_title=...
+ *
+ * IMPORTANT:
+ * - Always return JSON (even on warnings/fatal)
  */
+
+declare(strict_types=1);
 
 require_once __DIR__ . '/../../core/bootstrap.php';
 require_once __DIR__ . '/../../core/auth/SessionManager.php';
-
 require_once __DIR__ . '/../../core/base/Context.php';
-require_once __DIR__ . '/../../core/base/ContextException.php';
-
 require_once __DIR__ . '/../../core/lock/LockManager.php';
 
 header('Content-Type: application/json; charset=utf-8');
@@ -24,41 +26,79 @@ function j($a, int $code = 200): void {
   exit;
 }
 
-SessionManager::start();
+/**
+ * Fatal/Warn/Notice yakala → JSON'a çevir
+ */
+ini_set('display_errors', '0');
+error_reporting(E_ALL);
 
-// ✅ Context’i session’dan boot et (tenant/period dolsun)
+set_error_handler(function($severity, $message, $file, $line) {
+  // Notice/warning gibi şeyler HTML basmasın, JSON dönelim
+  throw new ErrorException($message, 0, $severity, $file, $line);
+});
+
+register_shutdown_function(function() {
+  $e = error_get_last();
+  if (!$e) return;
+
+  // Eğer zaten response yazıldıysa dokunma
+  if (headers_sent()) return;
+
+  header('Content-Type: application/json; charset=utf-8');
+  http_response_code(500);
+  echo json_encode([
+    'ok' => false,
+    'error' => 'fatal_error',
+    'error_detail' => $e['message'] ?? 'unknown',
+    'file' => $e['file'] ?? null,
+    'line' => $e['line'] ?? null,
+  ], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+});
+
 try {
-  if (isset($_SESSION['context']) && is_array($_SESSION['context'])) {
-    Context::bootFromSession();
+  SessionManager::start();
+
+  // Context varsa boot et (tenant key düzgün çıksın)
+  try {
+    if (class_exists('Context') && isset($_SESSION['context']) && is_array($_SESSION['context'])) {
+      Context::bootFromSession();
+    }
+  } catch (Throwable $e) {
+    // önemli değil; LockManager yine çalışabilir
   }
+
+  $module  = trim((string)($_GET['module'] ?? ''));
+  $docType = trim((string)($_GET['doc_type'] ?? ''));
+  $docId   = trim((string)($_GET['doc_id'] ?? ''));
+
+  if ($module === '' || $docType === '' || $docId === '') {
+    j(['ok'=>false,'error'=>'module,doc_type,doc_id_required'], 400);
+  }
+
+  $status = trim((string)($_GET['status'] ?? 'editing'));
+  if (!in_array($status, ['editing','viewing','approving'], true)) $status = 'editing';
+
+  $ttl = (int)($_GET['ttl'] ?? 900);
+  if ($ttl < 60) $ttl = 60;
+  if ($ttl > 7200) $ttl = 7200;
+
+  $docNo = trim((string)($_GET['doc_no'] ?? ''));
+  $docTitle = trim((string)($_GET['doc_title'] ?? ''));
+
+  $res = LockManager::acquire([
+    'module' => $module,
+    'doc_type' => $docType,
+    'doc_id' => $docId,
+    'doc_no' => $docNo !== '' ? $docNo : null,
+    'doc_title' => $docTitle !== '' ? $docTitle : null,
+  ], $ttl, $status);
+
+  j($res);
+
 } catch (Throwable $e) {
-  // lock endpointinde redirect istemiyoruz; context boş kalsa da ok
+  j([
+    'ok' => false,
+    'error' => 'exception',
+    'error_detail' => $e->getMessage(),
+  ], 500);
 }
-
-$module  = trim($_GET['module'] ?? '');
-$docType = trim($_GET['doc_type'] ?? '');
-$docId   = trim($_GET['doc_id'] ?? '');
-
-if ($module === '' || $docType === '' || $docId === '') {
-  j(['ok'=>false,'error'=>'module,doc_type,doc_id_required'], 400);
-}
-
-$status = trim($_GET['status'] ?? 'editing');
-if (!in_array($status, ['editing','viewing','approving'], true)) $status = 'editing';
-
-$ttl = (int)($_GET['ttl'] ?? 900);
-if ($ttl < 60) $ttl = 60;
-if ($ttl > 7200) $ttl = 7200;
-
-$docNo = trim($_GET['doc_no'] ?? '');
-$docTitle = trim($_GET['doc_title'] ?? '');
-
-$res = LockManager::acquire([
-  'module'    => $module,
-  'doc_type'  => $docType,
-  'doc_id'    => $docId,
-  'doc_no'    => ($docNo !== '' ? $docNo : null),
-  'doc_title' => ($docTitle !== '' ? $docTitle : null),
-], $ttl, $status);
-
-j($res);

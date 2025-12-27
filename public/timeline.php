@@ -4,13 +4,14 @@
  *
  * Timeline (V1 FINAL - UI)
  * - Event listesi kart UI
- * - TR tarih/saat formatı (Europe/Istanbul)
+ * - TR tarih/saat formatı
  * - Filtre: event_code / username / module / doc_type / doc_id
- * - Butonlar: LOG / SNAPSHOT / DIFF (HTML view'a yönlendirir)
+ * - Butonlar: LOG / SNAPSHOT / DIFF (HTML view)
+ * - ✅ Diff: v(prev) → v(current) gösterir
  *
  * Not:
- * - EventWriter'da summary refs içine koymuyoruz; summary event.data.summary içinde olmalı.
- * - snapshot_id, prev_snapshot_id, log_id => event.refs içinde beklenir.
+ * - summary event.data.summary içinde
+ * - snapshot_id, prev_snapshot_id, log_id => event.refs içinde
  */
 
 require_once __DIR__ . '/../core/bootstrap.php';
@@ -22,26 +23,23 @@ require_once __DIR__ . '/../core/action/ActionLogger.php';
 SessionManager::start();
 
 if (!isset($_SESSION['context']) || !is_array($_SESSION['context'])) {
-    header('Location: /php-mongo-erp/public/login.php');
-    exit;
+  header('Location: /php-mongo-erp/public/login.php');
+  exit;
 }
 
 try {
-    Context::bootFromSession();
+  Context::bootFromSession();
 } catch (ContextException $e) {
-    header('Location: /php-mongo-erp/public/login.php');
-    exit;
+  header('Location: /php-mongo-erp/public/login.php');
+  exit;
 }
 
 $ctx = Context::get();
 
 // View log
 ActionLogger::info('TIMELINE.VIEW', [
-    'source' => 'public/timeline.php'
+  'source' => 'public/timeline.php'
 ], $ctx);
-
-// timezone (UI)
-date_default_timezone_set('Europe/Istanbul');
 
 // ---- Filters ----
 $eventCode = trim($_GET['event'] ?? '');
@@ -55,99 +53,142 @@ if ($limit < 10) $limit = 10;
 if ($limit > 300) $limit = 300;
 
 // Tenant scope
-$cdef     = $ctx['CDEF01_id'] ?? null;
-$period   = $ctx['period_id'] ?? null;
+$cdef   = $ctx['CDEF01_id'] ?? null;
+$period = $ctx['period_id'] ?? null;
 
 // Filter build
 $filter = [];
-
 if ($cdef) $filter['context.CDEF01_id'] = $cdef;
 
 // Period: current + GLOBAL göster
 if ($period) {
-    $filter['$or'] = [
-        ['context.period_id' => $period],
-        ['context.period_id' => 'GLOBAL'],
-    ];
+  $filter['$or'] = [
+    ['context.period_id' => $period],
+    ['context.period_id' => 'GLOBAL'],
+  ];
 }
 
-if ($username !== '') $filter['context.username'] = $username;
+if ($username !== '')  $filter['context.username'] = $username;
 if ($eventCode !== '') $filter['event_code'] = $eventCode;
 
-if ($module !== '') $filter['target.module'] = $module;
+if ($module !== '')  $filter['target.module'] = $module;
 if ($docType !== '') $filter['target.doc_type'] = $docType;
-if ($docId !== '') $filter['target.doc_id'] = $docId;
+if ($docId !== '')   $filter['target.doc_id'] = $docId;
 
 $cur = MongoManager::collection('EVENT01E')->find(
-    $filter,
-    [
-        'sort'  => ['created_at' => -1],
-        'limit' => $limit,
-        'projection' => [
-            'event_code' => 1,
-            'created_at' => 1,
-            'context.username' => 1,
-            'context.UDEF01_id' => 1,
-            'target' => 1,
-            'refs' => 1,          // log_id / snapshot_id / prev_snapshot_id / request_id
-            'data' => 1,          // summary burada
-        ]
+  $filter,
+  [
+    'sort'  => ['created_at' => -1],
+    'limit' => $limit,
+    'projection' => [
+      'event_code' => 1,
+      'created_at' => 1,
+      'context.username' => 1,
+      'context.UDEF01_id' => 1,
+      'target' => 1,
+      'refs' => 1,   // log_id / snapshot_id / prev_snapshot_id / request_id
+      'data' => 1,   // summary burada
     ]
+  ]
 );
 
 $events = iterator_to_array($cur);
 
 function esc($s): string {
-    return htmlspecialchars((string)$s, ENT_QUOTES, 'UTF-8');
+  return htmlspecialchars((string)$s, ENT_QUOTES, 'UTF-8');
 }
 
-/**
- * ISO string (UTC) -> TR (Europe/Istanbul)
- * - created_at genelde "2025-12-26T19:18:08+00:00" gibi geliyor.
- * - Parse ederken UTC kabul edip Istanbul’a çeviriyoruz.
- */
+date_default_timezone_set('Europe/Istanbul');
+
 function fmt_tr($iso): string {
-    if (!$iso) return '-';
-    try {
-        $tzUtc = new DateTimeZone('UTC');
-        $tzTr  = new DateTimeZone('Europe/Istanbul');
-
-        // ISO içindeki timezone varsa DateTime onu okur ama biz yine de güvenli parse edelim
-        $dt = new DateTime($iso, $tzUtc);
-        $dt->setTimezone($tzTr);
-
-        return $dt->format('d.m.Y H:i:s');
-    } catch (Throwable $e) {
-        return (string)$iso;
-    }
+  if (!$iso) return '-';
+  try {
+    $dt = new DateTime($iso);
+    return $dt->format('d.m.Y H:i:s');
+  } catch (Throwable $e) {
+    $ts = strtotime((string)$iso);
+    if ($ts !== false) return date('d.m.Y H:i:s', $ts);
+    return (string)$iso;
+  }
 }
 
-// BSON -> array (hafif)
 function bson2arr($v) {
-    if ($v instanceof MongoDB\Model\BSONDocument || $v instanceof MongoDB\Model\BSONArray) {
-        $v = $v->getArrayCopy();
-    }
-    if (is_array($v)) {
-        $out = [];
-        foreach ($v as $k => $vv) $out[$k] = bson2arr($vv);
-        return $out;
-    }
-    if ($v instanceof MongoDB\BSON\UTCDateTime) return $v->toDateTime()->format('c');
-    if ($v instanceof MongoDB\BSON\ObjectId) return (string)$v;
-    return $v;
+  if ($v instanceof MongoDB\Model\BSONDocument || $v instanceof MongoDB\Model\BSONArray) {
+    $v = $v->getArrayCopy();
+  }
+  if (is_array($v)) {
+    $out = [];
+    foreach ($v as $k => $vv) $out[$k] = bson2arr($vv);
+    return $out;
+  }
+  if ($v instanceof MongoDB\BSON\UTCDateTime) return $v->toDateTime()->format('c');
+  if ($v instanceof MongoDB\BSON\ObjectId) return (string)$v;
+  return $v;
 }
 
 $events = array_map('bson2arr', $events);
 
-// UI: event_code -> title
 function event_title(string $code): string {
-    $map = [
-        'I18N.ADMIN.SAVE' => 'Dil Yönetimi: Kaydet',
-        'I18N.ADMIN.VIEW' => 'Dil Yönetimi: Görüntüle',
-        'AUDIT.VIEW'      => 'Audit View: Görüntüle',
-        'TIMELINE.VIEW'   => 'Timeline: Görüntüle',
-    ];
-    return $map[$code] ?? $code;
+  $map = [
+    'I18N.ADMIN.SAVE' => 'Dil Yönetimi: Kaydet',
+    'I18N.ADMIN.VIEW' => 'Dil Yönetimi: Görüntüle',
+    'AUDIT.VIEW'      => 'Audit View: Görüntüle',
+    'TIMELINE.VIEW'   => 'Timeline: Görüntüle',
+    'LOCK.ACQUIRE'    => 'Lock: Alındı',
+    'LOCK.RELEASE'    => 'Lock: Bırakıldı',
+  ];
+  return $map[$code] ?? $code;
+}
+
+/**
+ * ✅ Snapshot version map: eventlerden snapId/prevId topla, SNAP01E'den tek query ile çek.
+ * map: [ "snapshot_id_str" => version_int ]
+ */
+$snapIdsToFetch = [];
+foreach ($events as $ev) {
+  $refs = $ev['refs'] ?? [];
+  $sid  = $refs['snapshot_id'] ?? null;
+  $pid  = $refs['prev_snapshot_id'] ?? null;
+  if ($sid) $snapIdsToFetch[(string)$sid] = true;
+  if ($pid) $snapIdsToFetch[(string)$pid] = true;
+}
+
+$snapVersionMap = [];
+if (!empty($snapIdsToFetch)) {
+  $objIds = [];
+  foreach (array_keys($snapIdsToFetch) as $idStr) {
+    try {
+      $objIds[] = new MongoDB\BSON\ObjectId($idStr);
+    } catch (Throwable $e) {
+      // ignore bad ids
+    }
+  }
+
+  if (!empty($objIds)) {
+    $snapCur = MongoManager::collection('SNAP01E')->find(
+      ['_id' => ['$in' => $objIds]],
+      ['projection' => ['version' => 1]]
+    );
+
+    foreach ($snapCur as $s) {
+      if ($s instanceof MongoDB\Model\BSONDocument) $s = $s->getArrayCopy();
+      $id = $s['_id'] ?? null;
+      if ($id instanceof MongoDB\BSON\ObjectId) $id = (string)$id;
+      if ($id) $snapVersionMap[$id] = (int)($s['version'] ?? 0);
+    }
+  }
+}
+
+function diff_label(?string $prevId, ?string $snapId, array $verMap): ?string {
+  if (!$prevId || !$snapId) return null;
+
+  $pv = $verMap[$prevId] ?? null;
+  $sv = $verMap[$snapId] ?? null;
+
+  if (!$pv && !$sv) return null;
+  if ($pv && $sv) return "v{$pv} → v{$sv}";
+  if ($sv) return "→ v{$sv}";
+  return "v{$pv} →";
 }
 ?>
 <!doctype html>
@@ -175,7 +216,7 @@ function event_title(string $code): string {
 
     .bar{
       display:grid;
-      grid-template-columns: 1fr 1fr 1fr 1fr auto auto;
+      grid-template-columns: 1fr 1fr 1fr 1fr 1fr auto auto;
       gap:12px;
       align-items:center;
       margin: 10px 0 14px;
@@ -184,7 +225,6 @@ function event_title(string $code): string {
       .bar{ grid-template-columns: 1fr 1fr; }
     }
 
-    /* ✅ textbox fix: koyu tema input */
     .in{
       width:100%;
       height:44px;
@@ -214,16 +254,12 @@ function event_title(string $code): string {
       justify-content:center;
       white-space:nowrap;
     }
-    .btn-primary{
-      background:var(--primary);
-      border-color: transparent;
-      color:#fff;
-    }
+    .btn-primary{ background:var(--primary); border-color: transparent; color:#fff; }
     .btn:hover{ filter: brightness(1.05); }
     .btn:active{ transform: translateY(1px); }
+    .btn.disabled{ opacity:.45; cursor:default; pointer-events:none; }
 
     .cards{ display:flex; flex-direction:column; gap:12px; margin-top:12px; }
-
     .card{
       background:var(--panel2);
       border:1px solid var(--border);
@@ -302,6 +338,20 @@ function event_title(string $code): string {
       gap:8px;
       flex-wrap:wrap;
       margin-top:10px;
+      align-items:center;
+    }
+
+    .diffTag{
+      display:inline-flex;
+      align-items:center;
+      gap:6px;
+      padding:6px 10px;
+      border-radius:999px;
+      border:1px solid var(--border);
+      background:rgba(0,0,0,.18);
+      color:rgba(231,234,243,.92);
+      font-size:12px;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
     }
   </style>
 </head>
@@ -317,11 +367,11 @@ function event_title(string $code): string {
   </div>
 
   <form method="GET" class="bar">
-    <input class="in" name="event"   value="<?php echo esc($eventCode); ?>" placeholder="event_code (örn: I18N.ADMIN.SAVE)">
-    <input class="in" name="user"    value="<?php echo esc($username); ?>"  placeholder="username (örn: admin)">
-    <input class="in" name="module"  value="<?php echo esc($module); ?>"    placeholder="module (örn: i18n)">
-    <input class="in" name="doc_type"value="<?php echo esc($docType); ?>"   placeholder="doc_type (örn: LANG01T)">
-    <input class="in" name="doc_id"  value="<?php echo esc($docId); ?>"     placeholder="doc_id (örn: DICT)">
+    <input class="in" name="event"    value="<?php echo esc($eventCode); ?>" placeholder="event_code (örn: I18N.ADMIN.SAVE)">
+    <input class="in" name="user"     value="<?php echo esc($username); ?>"  placeholder="username (örn: admin)">
+    <input class="in" name="module"   value="<?php echo esc($module); ?>"    placeholder="module (örn: i18n)">
+    <input class="in" name="doc_type" value="<?php echo esc($docType); ?>"   placeholder="doc_type (örn: LANG01T)">
+    <input class="in" name="doc_id"   value="<?php echo esc($docId); ?>"     placeholder="doc_id (örn: DICT)">
     <button class="btn btn-primary" type="submit">Getir</button>
     <a class="btn" href="/php-mongo-erp/public/timeline.php">Sıfırla</a>
     <input type="hidden" name="limit" value="<?php echo (int)$limit; ?>">
@@ -329,9 +379,7 @@ function event_title(string $code): string {
 
   <div class="cards">
     <?php if (empty($events)): ?>
-      <div class="card">
-        <div class="meta">Kayıt bulunamadı.</div>
-      </div>
+      <div class="card"><div class="meta">Kayıt bulunamadı.</div></div>
     <?php endif; ?>
 
     <?php foreach ($events as $ev):
@@ -339,11 +387,12 @@ function event_title(string $code): string {
       $tIso = (string)($ev['created_at'] ?? '');
       $tTr  = fmt_tr($tIso);
       $user = (string)($ev['context']['username'] ?? '');
+
       $target = $ev['target'] ?? [];
       $refs   = $ev['refs'] ?? [];
       $data   = $ev['data'] ?? [];
 
-      $sum = $data['summary'] ?? null; // ✅ summary burada
+      $sum = $data['summary'] ?? null;
 
       $logId  = $refs['log_id'] ?? null;
       $snapId = $refs['snapshot_id'] ?? null;
@@ -352,6 +401,13 @@ function event_title(string $code): string {
       $tMod = $target['module'] ?? '-';
       $tDt  = $target['doc_type'] ?? '-';
       $tDi  = $target['doc_id'] ?? '-';
+      $tNo  = $target['doc_no'] ?? null;
+
+      $logViewUrl  = $logId  ? ('/php-mongo-erp/public/log_view.php?log_id=' . urlencode($logId)) : null;
+      $snapViewUrl = $snapId ? ('/php-mongo-erp/public/snapshot_view.php?snapshot_id=' . urlencode($snapId)) : null;
+      $diffViewUrl = ($snapId && $prevId) ? ('/php-mongo-erp/public/snapshot_diff_view.php?snapshot_id=' . urlencode($snapId)) : null;
+
+      $diffLbl = diff_label($prevId ? (string)$prevId : null, $snapId ? (string)$snapId : null, $snapVersionMap);
     ?>
       <div class="card">
         <div class="row1">
@@ -370,6 +426,9 @@ function event_title(string $code): string {
           <span class="chip">module: <b><?php echo esc($tMod); ?></b></span>
           <span class="chip">doc_type: <b><?php echo esc($tDt); ?></b></span>
           <span class="chip">doc_id: <b><?php echo esc($tDi); ?></b></span>
+          <?php if ($tNo): ?>
+            <span class="chip">doc_no: <b><?php echo esc($tNo); ?></b></span>
+          <?php endif; ?>
         </div>
 
         <div class="grid2">
@@ -400,22 +459,25 @@ function event_title(string $code): string {
         </div>
 
         <div class="actions">
-          <?php if ($logId): ?>
-            <a class="btn" target="_blank" href="/php-mongo-erp/public/log_get_view.php?log_id=<?php echo urlencode($logId); ?>">LOG</a>
+          <?php if ($logViewUrl): ?>
+            <a class="btn" target="_blank" href="<?php echo esc($logViewUrl); ?>">LOG</a>
           <?php else: ?>
-            <span class="btn" style="opacity:.45; cursor:default;">LOG</span>
+            <span class="btn disabled">LOG</span>
           <?php endif; ?>
 
-          <?php if ($snapId): ?>
-            <a class="btn" target="_blank" href="/php-mongo-erp/public/snapshot_get_view.php?snapshot_id=<?php echo urlencode($snapId); ?>">SNAPSHOT</a>
+          <?php if ($snapViewUrl): ?>
+            <a class="btn" target="_blank" href="<?php echo esc($snapViewUrl); ?>">SNAPSHOT</a>
           <?php else: ?>
-            <span class="btn" style="opacity:.45; cursor:default;">SNAPSHOT</span>
+            <span class="btn disabled">SNAPSHOT</span>
           <?php endif; ?>
 
-          <?php if ($snapId && $prevId): ?>
-            <a class="btn" target="_blank" href="/php-mongo-erp/public/snapshot_diff_view.php?snapshot_id=<?php echo urlencode($snapId); ?>">DIFF</a>
+          <?php if ($diffViewUrl): ?>
+            <a class="btn" target="_blank" href="<?php echo esc($diffViewUrl); ?>">DIFF</a>
+            <?php if ($diffLbl): ?>
+              <span class="diffTag"><?php echo esc($diffLbl); ?></span>
+            <?php endif; ?>
           <?php else: ?>
-            <span class="btn" style="opacity:.45; cursor:default;">DIFF</span>
+            <span class="btn disabled">DIFF</span>
           <?php endif; ?>
         </div>
       </div>
