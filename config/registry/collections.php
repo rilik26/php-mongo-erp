@@ -30,6 +30,9 @@ return [
     'LOCK01T', 
     'SNAPSEQ01E',
     'LOCK01E',
+
+    'GENDOC01E',
+    'GENDOC01T',
     
     
 

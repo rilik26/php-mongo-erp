@@ -1,23 +1,34 @@
 <?php
 /**
- * public/api/snapshot_diff.php
+ * public/api/snapshot_diff.php (FINAL)
  *
- * GET:
- *  A) ?snapshot_id=<SNAP01E _id>  -> bu snapshot vs prev_snapshot
- *  B) ?target_key=<...>           -> latest vs prev (same target_key)
+ * Kullanım:
+ *  A) snapshot_id ile:
+ *     /public/api/snapshot_diff.php?snapshot_id=...
  *
- * Optional:
- *  - &view=1 -> HTML view
+ *  B) target_key ile:
+ *     /public/api/snapshot_diff.php?target_key=module|doc_type|doc_id|CDEF01_id|period_id|facility_id
+ *
+ * Çıktı:
+ * {
+ *   ok: true,
+ *   mode: "lang" | "generic",
+ *   target_key: "...",
+ *   prev: { id, version } | null,
+ *   latest: { id, version },
+ *   diff: {...},
+ *   summary: {...},
+ *   note: null | "no_prev_snapshot"
+ * }
  */
 
 require_once __DIR__ . '/../../core/bootstrap.php';
-require_once __DIR__ . '/../../core/auth/SessionManager.php';
+require_once __DIR__ . '/../../core/snapshot/SnapshotDiff.php';
 
-SessionManager::start();
+header('Content-Type: application/json; charset=utf-8');
 
 function j($a, int $code = 200): void {
   http_response_code($code);
-  header('Content-Type: application/json; charset=utf-8');
   echo json_encode($a, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
   exit;
 }
@@ -36,234 +47,134 @@ function bson_to_array($v) {
   return $v;
 }
 
-function esc($s): string {
-  return htmlspecialchars((string)$s, ENT_QUOTES, 'UTF-8');
-}
-
-function fmt_tr($isoOrNull): string {
-  if (!$isoOrNull) return '';
+function find_snapshot_by_id(string $id): ?array {
   try {
-    $dt = new DateTime($isoOrNull, new DateTimeZone('UTC'));
-    $dt->setTimezone(new DateTimeZone('Europe/Istanbul'));
-    return $dt->format('d.m.Y H:i:s');
+    $oid = new MongoDB\BSON\ObjectId($id);
   } catch (Throwable $e) {
-    return (string)$isoOrNull;
+    return null;
   }
+
+  $doc = MongoManager::collection('SNAP01E')->findOne(['_id' => $oid]);
+  if (!$doc) return null;
+
+  if ($doc instanceof MongoDB\Model\BSONDocument) $doc = $doc->getArrayCopy();
+  return bson_to_array($doc);
 }
 
-/**
- * LANG rows diff:
- * rows[key] = { module,key,tr,en }
- * Diff output:
- *  added_keys, removed_keys, changed_keys[key][tr/en/from/to]
- */
-function diff_lang_rows(array $oldRows, array $newRows): array {
-  $oldKeys = array_keys($oldRows);
-  $newKeys = array_keys($newRows);
-
-  $added = array_values(array_diff($newKeys, $oldKeys));
-  $removed = array_values(array_diff($oldKeys, $newKeys));
-
-  $changed = [];
-  foreach ($newRows as $k => $row) {
-    if (!isset($oldRows[$k])) continue;
-    $o = (array)$oldRows[$k];
-    $n = (array)$row;
-
-    foreach (['tr','en','module'] as $field) {
-      $ov = (string)($o[$field] ?? '');
-      $nv = (string)($n[$field] ?? '');
-      if ($ov !== $nv) {
-        if (!isset($changed[$k])) $changed[$k] = [];
-        $changed[$k][$field] = ['from'=>$ov, 'to'=>$nv];
-      }
-    }
-  }
-
-  sort($added);
-  sort($removed);
-
-  ksort($changed);
-
-  return [
-    'added_keys' => $added,
-    'removed_keys' => $removed,
-    'changed_keys' => $changed
-  ];
-}
-
-function summarize_lang_diff(array $diff, int $sample = 10): array {
-  $added = $diff['added_keys'] ?? [];
-  $removed = $diff['removed_keys'] ?? [];
-  $changed = $diff['changed_keys'] ?? [];
-
-  $changedKeys = array_keys($changed);
-
-  return [
-    'mode' => 'lang',
-    'added_keys_count' => count($added),
-    'removed_keys_count' => count($removed),
-    'changed_keys_count' => count($changedKeys),
-    'added_keys_sample' => array_slice($added, 0, $sample),
-    'removed_keys_sample' => array_slice($removed, 0, $sample),
-    'changed_keys_sample' => array_slice($changedKeys, 0, $sample),
-  ];
-}
-
-$snapshotId = trim($_GET['snapshot_id'] ?? '');
-$targetKey  = trim($_GET['target_key'] ?? '');
-$view       = (string)($_GET['view'] ?? '') === '1';
-
-if ($snapshotId === '' && $targetKey === '') {
-  if ($view) { http_response_code(400); echo "snapshot_id veya target_key gerekli"; exit; }
-  j(['ok'=>false,'error'=>'snapshot_id_or_target_key_required'], 400);
-}
-
-// resolve snapshots: prev + latest
-$prev = null;
-$latest = null;
-
-if ($snapshotId !== '') {
-  try {
-    $latestDoc = MongoManager::collection('SNAP01E')->findOne(['_id' => new MongoDB\BSON\ObjectId($snapshotId)]);
-  } catch (Throwable $e) {
-    if ($view) { http_response_code(400); echo "Geçersiz snapshot_id"; exit; }
-    j(['ok'=>false,'error'=>'invalid_snapshot_id'], 400);
-  }
-  if (!$latestDoc) {
-    if ($view) { http_response_code(404); echo "Snapshot bulunamadı"; exit; }
-    j(['ok'=>false,'error'=>'not_found'], 404);
-  }
-  $latest = bson_to_array($latestDoc);
-  $targetKey = (string)($latest['target_key'] ?? '');
-
-  $prevId = $latest['prev_snapshot_id'] ?? null;
-  if ($prevId) {
-    try {
-      $prevDoc = MongoManager::collection('SNAP01E')->findOne(['_id' => new MongoDB\BSON\ObjectId((string)$prevId)]);
-      if ($prevDoc) $prev = bson_to_array($prevDoc);
-    } catch (Throwable $e) {
-      $prev = null;
-    }
-  }
-} else {
-  // latest by target_key
-  $latestDoc = MongoManager::collection('SNAP01E')->findOne(
+function find_latest_snapshot_by_target_key(string $targetKey): ?array {
+  $doc = MongoManager::collection('SNAP01E')->findOne(
     ['target_key' => $targetKey],
     ['sort' => ['version' => -1]]
   );
-
-  if (!$latestDoc) {
-    if ($view) { http_response_code(404); echo "Snapshot bulunamadı"; exit; }
-    j(['ok'=>false,'error'=>'not_found'], 404);
-  }
-  $latest = bson_to_array($latestDoc);
-
-  // prev = version-1
-  $prevDoc = MongoManager::collection('SNAP01E')->findOne(
-    ['target_key' => $targetKey, 'version' => (int)($latest['version'] ?? 0) - 1]
-  );
-  if ($prevDoc) $prev = bson_to_array($prevDoc);
+  if (!$doc) return null;
+  if ($doc instanceof MongoDB\Model\BSONDocument) $doc = $doc->getArrayCopy();
+  return bson_to_array($doc);
 }
 
-// compute diff (LANG rows mode)
-$diff = ['added_keys'=>[], 'removed_keys'=>[], 'changed_keys'=>[]];
-$summary = ['mode'=>'lang','note'=>'no_prev_snapshot'];
+function pick_prev_snapshot(array $latest): ?array {
+  $prevId = $latest['prev_snapshot_id'] ?? null;
+  if (!$prevId) return null;
 
-if ($prev) {
+  // prev_snapshot_id bazen string, bazen ObjectId stringe çevrilmiş olabilir
+  $prevId = (string)$prevId;
+  if ($prevId === '') return null;
+
+  return find_snapshot_by_id($prevId);
+}
+
+function is_lang_snapshot(array $snap): bool {
+  // LANG snapshot: data.rows = { key => {module,key,tr,en} }
+  $rows = $snap['data']['rows'] ?? null;
+  return is_array($rows);
+}
+
+// -------------------- input --------------------
+$snapshotId = trim($_GET['snapshot_id'] ?? '');
+$targetKey  = trim($_GET['target_key'] ?? '');
+
+if ($snapshotId === '' && $targetKey === '') {
+  j(['ok' => false, 'error' => 'snapshot_id_or_target_key_required'], 400);
+}
+
+// -------------------- load snapshots --------------------
+$latest = null;
+
+if ($snapshotId !== '') {
+  $latest = find_snapshot_by_id($snapshotId);
+  if (!$latest) j(['ok'=>false,'error'=>'snapshot_not_found'], 404);
+  $targetKey = (string)($latest['target_key'] ?? $targetKey);
+} else {
+  $latest = find_latest_snapshot_by_target_key($targetKey);
+  if (!$latest) j(['ok'=>false,'error'=>'latest_snapshot_not_found_for_target_key'], 404);
+}
+
+$prev = pick_prev_snapshot($latest);
+
+if (!$prev) {
+  // prev yoksa diff yok — ama latest bilgisi dönsün
+  $mode = is_lang_snapshot($latest) ? 'lang' : 'generic';
+  j([
+    'ok' => true,
+    'mode' => $mode,
+    'target_key' => $targetKey,
+    'prev' => null,
+    'latest' => [
+      'id' => (string)($latest['_id'] ?? ''),
+      'version' => (int)($latest['version'] ?? 0),
+    ],
+    'diff' => [
+      'added_keys' => [],
+      'removed_keys' => [],
+      'changed_keys' => [],
+    ],
+    'summary' => [
+      'mode' => $mode,
+      'note' => 'no_prev_snapshot',
+    ],
+    'note' => 'no_prev_snapshot',
+  ]);
+}
+
+// -------------------- compute diff --------------------
+$mode = null;
+$diff = null;
+$summary = null;
+
+if (is_lang_snapshot($latest) && is_lang_snapshot($prev)) {
+  $mode = 'lang';
+
   $oldRows = (array)($prev['data']['rows'] ?? []);
   $newRows = (array)($latest['data']['rows'] ?? []);
 
-  $diff = diff_lang_rows($oldRows, $newRows);
-  $summary = summarize_lang_diff($diff, 10);
+  $diff = SnapshotDiff::diffLangRows($oldRows, $newRows);
+  $summary = SnapshotDiff::summarizeLangDiff($diff, 12);
+} else {
+  $mode = 'generic';
+
+  // GENEL: data komple diff (rows değil)
+  $oldData = (array)($prev['data'] ?? []);
+  $newData = (array)($latest['data'] ?? []);
+
+  $diff = SnapshotDiff::diffAssocPaths($oldData, $newData);
+  $summary = SnapshotDiff::summarizeGenericDiff($diff, 12);
 }
 
-$out = [
+// -------------------- response --------------------
+j([
   'ok' => true,
+  'mode' => $mode,
   'target_key' => $targetKey,
-  'prev' => $prev ? ['id'=>$prev['_id'] ?? null, 'version'=>$prev['version'] ?? null] : null,
-  'latest' => ['id'=>$latest['_id'] ?? null, 'version'=>$latest['version'] ?? null],
+
+  'prev' => [
+    'id' => (string)($prev['_id'] ?? ''),
+    'version' => (int)($prev['version'] ?? 0),
+  ],
+  'latest' => [
+    'id' => (string)($latest['_id'] ?? ''),
+    'version' => (int)($latest['version'] ?? 0),
+  ],
+
   'diff' => $diff,
   'summary' => $summary,
-];
-
-if (!$view) {
-  j($out);
-}
-
-// ---- HTML VIEW ----
-header('Content-Type: text/html; charset=utf-8');
-
-$latestTime = fmt_tr($latest['created_at'] ?? null);
-$prevTime = $prev ? fmt_tr($prev['created_at'] ?? null) : '';
-
-?>
-<!doctype html>
-<html>
-<head>
-  <meta charset="utf-8">
-  <title>SNAPSHOT DIFF</title>
-  <style>
-    body{font-family:Arial,sans-serif;margin:16px;}
-    .card{border:1px solid #eee;border-radius:10px;padding:12px;margin-bottom:12px;}
-    .h{display:flex;gap:10px;flex-wrap:wrap;align-items:center;}
-    .pill{padding:4px 8px;border-radius:999px;background:#f3f3f3;font-size:12px;}
-    table{border-collapse:collapse;width:100%;}
-    th,td{border:1px solid #eee;padding:8px;vertical-align:top;}
-    th{background:#f7f7f7;text-align:left;}
-    .k{color:#666;font-size:12px;}
-    .code{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:12px;}
-  </style>
-</head>
-<body>
-
-<div class="card">
-  <div class="h">
-    <span class="pill"><strong>DIFF</strong></span>
-    <span class="pill">target_key: <span class="code"><?php echo esc($targetKey); ?></span></span>
-  </div>
-  <div style="margin-top:8px" class="k">
-    Prev: <?php echo esc($out['prev']['version'] ?? '-'); ?> (<?php echo esc($prevTime ?: '-'); ?>)
-    &nbsp;→&nbsp;
-    Latest: <?php echo esc($out['latest']['version'] ?? '-'); ?> (<?php echo esc($latestTime ?: '-'); ?>)
-  </div>
-</div>
-
-<div class="card">
-  <h3 style="margin:0 0 8px 0;">Özet</h3>
-  <table>
-    <tr><th>added</th><td><?php echo esc($summary['added_keys_count'] ?? 0); ?></td></tr>
-    <tr><th>removed</th><td><?php echo esc($summary['removed_keys_count'] ?? 0); ?></td></tr>
-    <tr><th>changed</th><td><?php echo esc($summary['changed_keys_count'] ?? 0); ?></td></tr>
-    <tr><th>changed sample</th><td class="code"><?php echo esc(json_encode($summary['changed_keys_sample'] ?? [], JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES)); ?></td></tr>
-  </table>
-</div>
-
-<div class="card">
-  <h3 style="margin:0 0 8px 0;">Değişenler</h3>
-  <?php if (empty($diff['changed_keys'])): ?>
-    <div class="k">Değişiklik yok.</div>
-  <?php else: ?>
-    <table>
-      <tr>
-        <th style="width:260px;">Key</th>
-        <th>Değişiklik</th>
-      </tr>
-      <?php foreach ($diff['changed_keys'] as $k => $fields): ?>
-        <tr>
-          <td><span class="code"><strong><?php echo esc($k); ?></strong></span></td>
-          <td>
-            <?php foreach ($fields as $field => $ft): ?>
-              <div class="k"><strong><?php echo esc($field); ?></strong></div>
-              <div class="code"><?php echo esc((string)($ft['from'] ?? '')); ?> → <?php echo esc((string)($ft['to'] ?? '')); ?></div>
-              <div style="height:8px"></div>
-            <?php endforeach; ?>
-          </td>
-        </tr>
-      <?php endforeach; ?>
-    </table>
-  <?php endif; ?>
-</div>
-
-</body>
-</html>
+  'note' => null,
+]);

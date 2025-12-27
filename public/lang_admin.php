@@ -21,8 +21,10 @@
  *
  * DATATABLES:
  * - HTML tablo DataTables (paging/sort)
- * - q değişince state reset
- * - visible rows için lock_status ile 🔒 ikonları
+ * - q değişince state reset (stateSave bug fix)
+ *
+ * UI:
+ * - Toast yerine lockbar mesajı (kaydedildi / hata / lock durumu)
  */
 
 require_once __DIR__ . '/../core/bootstrap.php';
@@ -133,7 +135,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
       ]
     );
 
-    // EVENT: summary refs'e değil data'ya
+    // EVENT: summary event.data.summary içinde
     EventWriter::emit(
       'I18N.ADMIN.SAVE',
       [
@@ -158,11 +160,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
       ]
     );
 
-    $msgKey = 'lang.admin.saved';
-
-    // PRG: refresh ile re-POST olmasın
+    // PRG: refresh ile re-POST olmasın + lockbar mesajı için saved=1
     $redir = '/php-mongo-erp/public/lang_admin.php';
-    if ($q !== '') $redir .= '?q=' . rawurlencode($q);
+    $params = [];
+    if ($q !== '') $params['q'] = $q;
+    $params['saved'] = '1';
+
+    $redir .= '?' . http_build_query($params);
     header('Location: ' . $redir);
     exit;
   }
@@ -208,7 +212,7 @@ function h($s): string { return htmlspecialchars((string)$s, ENT_QUOTES, 'UTF-8'
 
     .small { font-size:12px; color:#666; }
     .stickybar { display:flex; gap:10px; align-items:center; margin:10px 0; flex-wrap:wrap; }
-    .btn { padding:6px 10px; border:1px solid #ccc; background:#fff; cursor:pointer; border-radius:6px; }
+    .btn { padding:6px 10px; border:1px solid #ccc; background:#fff; cursor:pointer; border-radius:6px; text-decoration:none; color:#000; }
     .btn-primary { border-color:#1e88e5; background:#1e88e5; color:#fff; }
 
     .lockbar{
@@ -219,10 +223,6 @@ function h($s): string { return htmlspecialchars((string)$s, ENT_QUOTES, 'UTF-8'
       display:inline-block; padding:3px 8px; border-radius:999px; font-size:12px;
       background:#E3F2FD; color:#1565C0; font-weight:600;
     }
-
-    .lock-cell span{ display:inline-block; width:22px; height:22px; line-height:22px; }
-    .lock-open{ opacity:.35; }
-    .lock-closed{ opacity:1; }
 
     /* DataTables küçük dokunuşlar */
     div.dataTables_wrapper .dataTables_length select,
@@ -278,11 +278,8 @@ function h($s): string { return htmlspecialchars((string)$s, ENT_QUOTES, 'UTF-8'
         $en = (string)($row['en'] ?? '');
         $safeKey = h($key);
       ?>
-        <tr data-doc-id="<?php echo $safeKey; ?>">
-          <td class="lock-cell" style="text-align:center; width:44px;">
-            <span class="lock-open" title="Kilit yok">🔓</span>
-          </td>
-
+        <tr data-doc-id="<?php echo h($lockDocId); ?>">
+          <td class="lock-cell" style="text-align:center; width:44px;">🔓</td>
           <td>
             <input type="text"
                    name="rows[<?php echo $safeKey; ?>][module]"
@@ -319,16 +316,6 @@ function h($s): string { return htmlspecialchars((string)$s, ENT_QUOTES, 'UTF-8'
 
 <script>
 (function(){
-  // showToast helper (varsa onu kullanır, yoksa alert)
-  function toast(type, msg){
-    if (typeof window.showToast === 'function') {
-      window.showToast(type, msg);
-      return;
-    }
-    if (type === 'success') console.log(msg);
-    else alert(msg);
-  }
-
   const lockStatusText = document.getElementById('lockStatusText');
   const form = document.getElementById('langForm');
 
@@ -371,28 +358,30 @@ function h($s): string { return htmlspecialchars((string)$s, ENT_QUOTES, 'UTF-8'
       if (!j.ok) {
         acquired = false;
         setReadOnlyMode(true);
-        lockStatusText.textContent = 'Lock alınamadı: ' + (j.error || 'unknown');
-        toast('error', 'Lock alınamadı: ' + (j.error || 'unknown'));
+        lockStatusText.textContent = '❌ Lock alınamadı: ' + (j.error || 'unknown');
         return;
       }
 
       acquired = !!j.acquired;
 
+      // Eğer saved=1 varsa, lock mesajını override etmeyelim.
+      const params = new URLSearchParams(window.location.search);
+      const hasSavedFlag = (params.get('saved') === '1');
+
       if (acquired) {
         setReadOnlyMode(false);
-        lockStatusText.textContent = 'Kilit sende. (editing) — çıkınca otomatik bırakılacak.';
-        toast('success', 'Lock alındı (editing).');
+        if (!hasSavedFlag) {
+          lockStatusText.textContent = '🔒 Kilit sende. (editing) — çıkınca otomatik bırakılacak.';
+        }
       } else {
         setReadOnlyMode(true);
         const who = j.lock?.context?.username ? (' (' + j.lock.context.username + ')') : '';
-        lockStatusText.textContent = 'Kilit başka bir kullanıcıda' + who + '. Sadece görüntüleme modu.';
-        toast('warning', 'Kilit başka bir kullanıcıda' + who + '. Sayfa read-only.');
+        lockStatusText.textContent = '👁️ Kilit başka bir kullanıcıda' + who + '. Sadece görüntüleme modu.';
       }
     } catch(e){
       acquired = false;
       setReadOnlyMode(true);
-      lockStatusText.textContent = 'Lock hatası: ' + e.message;
-      toast('error', 'Lock hatası: ' + e.message);
+      lockStatusText.textContent = '❌ Lock hatası: ' + e.message;
     }
   }
 
@@ -484,9 +473,9 @@ function h($s): string { return htmlspecialchars((string)$s, ENT_QUOTES, 'UTF-8'
       searching: false,       // server-side q
       pageLength: 50,
       lengthMenu: [[25, 50, 100, 250, -1], [25, 50, 100, 250, "All"]],
-      order: [[2, 'asc']],    // ✅ key col (lock=0, module=1, key=2)
+      order: [[2, 'asc']],    // key col (lock=0, module=1, key=2)
       columnDefs: [
-        { orderable:false, targets:[0] } // lock sütunu sortable değil
+        { orderable:false, targets:[0] }
       ],
       stateSave: true,
       autoWidth: false,
@@ -507,7 +496,7 @@ function h($s): string { return htmlspecialchars((string)$s, ENT_QUOTES, 'UTF-8'
           if (!raw) return null;
           const obj = JSON.parse(raw);
           if (!obj || typeof obj !== 'object') return null;
-          if ((obj.q || '') !== currentQ) return null; // ✅ q değişince state yok say
+          if ((obj.q || '') !== currentQ) return null;
           return obj.data || null;
         } catch(e){
           return null;
@@ -515,20 +504,26 @@ function h($s): string { return htmlspecialchars((string)$s, ENT_QUOTES, 'UTF-8'
       }
     });
 
-    // her draw'da visible lock refresh
     dt.on('draw', function(){
       refreshVisibleLocks(dt);
     });
 
-    // initial
     refreshVisibleLocks(dt);
-
     return dt;
+  }
+
+  // ---- save feedback (lockbar) ----
+  function applySavedFlagToLockbar(){
+    const params = new URLSearchParams(window.location.search);
+    if (params.get('saved') === '1') {
+      lockStatusText.textContent = '✅ Kaydedildi. Kilit sende (editing).';
+    }
   }
 
   window.addEventListener('beforeunload', releaseBeacon);
 
   // Start
+  applySavedFlagToLockbar();
   acquireLock();
   initDataTable();
 

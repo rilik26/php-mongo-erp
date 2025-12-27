@@ -110,6 +110,11 @@
                     <div>approval</div>
                   </a>
                 </li>
+                <li class="menu-item">
+                  <a href="gendoc_admin.php" class="menu-link">
+                    <div>gendoc_admin</div>
+                  </a>
+                </li>
               </ul>
             </li>
 
