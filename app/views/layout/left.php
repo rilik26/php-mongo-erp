@@ -85,19 +85,24 @@
                     <div>Locks</div>
                   </a>
                 </li>
-                <li class="menu-item active">
+                <li class="menu-item">
                   <a href="timeline.php" class="menu-link">
                     <div>timeline</div>
                   </a>
                 </li>
                 <li class="menu-item">
-                  <a href="app-logistics-dashboard.html" class="menu-link">
-                    <div data-i18n="Logistics">Logistics</div>
+                  <a href="docs.php" class="menu-link">
+                    <div>docs</div>
                   </a>
                 </li>
                 <li class="menu-item">
-                  <a href="app-academy-dashboard.html" class="menu-link">
-                    <div data-i18n="Academy">Academy</div>
+                  <a href="log_get_view.php" class="menu-link">
+                    <div>log_get_view</div>
+                  </a>
+                </li>
+                <li class="menu-item">
+                  <a href="audit_view.php" class="menu-link">
+                    <div>audit_view</div>
                   </a>
                 </li>
               </ul>

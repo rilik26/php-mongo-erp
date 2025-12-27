@@ -4,7 +4,7 @@
  *
  * Timeline (V1 FINAL - UI)
  * - Event listesi kart UI
- * - TR tarih/saat formatı
+ * - TR tarih/saat formatı (Europe/Istanbul)
  * - Filtre: event_code / username / module / doc_type / doc_id
  * - Butonlar: LOG / SNAPSHOT / DIFF (HTML view'a yönlendirir)
  *
@@ -40,6 +40,9 @@ ActionLogger::info('TIMELINE.VIEW', [
     'source' => 'public/timeline.php'
 ], $ctx);
 
+// timezone (UI)
+date_default_timezone_set('Europe/Istanbul');
+
 // ---- Filters ----
 $eventCode = trim($_GET['event'] ?? '');
 $username  = trim($_GET['user'] ?? '');
@@ -54,7 +57,6 @@ if ($limit > 300) $limit = 300;
 // Tenant scope
 $cdef     = $ctx['CDEF01_id'] ?? null;
 $period   = $ctx['period_id'] ?? null;
-$facility = $ctx['facility_id'] ?? null;
 
 // Filter build
 $filter = [];
@@ -99,11 +101,21 @@ function esc($s): string {
     return htmlspecialchars((string)$s, ENT_QUOTES, 'UTF-8');
 }
 
-// TR time
+/**
+ * ISO string (UTC) -> TR (Europe/Istanbul)
+ * - created_at genelde "2025-12-26T19:18:08+00:00" gibi geliyor.
+ * - Parse ederken UTC kabul edip Istanbul’a çeviriyoruz.
+ */
 function fmt_tr($iso): string {
     if (!$iso) return '-';
     try {
-        $dt = new DateTime($iso);
+        $tzUtc = new DateTimeZone('UTC');
+        $tzTr  = new DateTimeZone('Europe/Istanbul');
+
+        // ISO içindeki timezone varsa DateTime onu okur ama biz yine de güvenli parse edelim
+        $dt = new DateTime($iso, $tzUtc);
+        $dt->setTimezone($tzTr);
+
         return $dt->format('d.m.Y H:i:s');
     } catch (Throwable $e) {
         return (string)$iso;
@@ -127,7 +139,7 @@ function bson2arr($v) {
 
 $events = array_map('bson2arr', $events);
 
-// UI: event_code -> title (istersen i18n'e bağlarız)
+// UI: event_code -> title
 function event_title(string $code): string {
     $map = [
         'I18N.ADMIN.SAVE' => 'Dil Yönetimi: Kaydet',
@@ -389,14 +401,13 @@ function event_title(string $code): string {
 
         <div class="actions">
           <?php if ($logId): ?>
-            <!-- HTML view varsa buraya yönlendir -->
-            <a class="btn" target="_blank" href="/php-mongo-erp/public/log_view.php?log_id=<?php echo urlencode($logId); ?>">LOG</a>
+            <a class="btn" target="_blank" href="/php-mongo-erp/public/log_get_view.php?log_id=<?php echo urlencode($logId); ?>">LOG</a>
           <?php else: ?>
             <span class="btn" style="opacity:.45; cursor:default;">LOG</span>
           <?php endif; ?>
 
           <?php if ($snapId): ?>
-            <a class="btn" target="_blank" href="/php-mongo-erp/public/snapshot_view.php?snapshot_id=<?php echo urlencode($snapId); ?>">SNAPSHOT</a>
+            <a class="btn" target="_blank" href="/php-mongo-erp/public/snapshot_get_view.php?snapshot_id=<?php echo urlencode($snapId); ?>">SNAPSHOT</a>
           <?php else: ?>
             <span class="btn" style="opacity:.45; cursor:default;">SNAPSHOT</span>
           <?php endif; ?>

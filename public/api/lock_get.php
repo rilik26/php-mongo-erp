@@ -1,17 +1,15 @@
 <?php
 /**
- * public/api/lock_get.php
+ * public/api/log_get.php
+ *
+ * Log Get API (V1)
+ * - UACT01E içinden log döner
  *
  * GET:
- *  ?module=...&doc_type=...&doc_id=...
+ *  ?log_id=xxxxxxxxxxxxxxxxxxxxxxxx  (Mongo ObjectId string)
  *
  * Response:
- *  {
- *    ok: true,
- *    target_key: "...",
- *    locked: true|false,
- *    lock: {...} | null
- *  }
+ *  { ok:true, log:{...} }
  */
 
 require_once __DIR__ . '/../../core/bootstrap.php';
@@ -43,53 +41,30 @@ function bson_to_array($v) {
 
 SessionManager::start();
 
-// Context (varsa)
-$ctx = [];
+// login guard (API de korunsun)
+if (!isset($_SESSION['context']) || !is_array($_SESSION['context'])) {
+  j(['ok'=>false,'error'=>'login_required'], 401);
+}
+
 try {
-  if (isset($_SESSION['context']) && is_array($_SESSION['context'])) {
-    Context::bootFromSession();
-    $ctx = Context::get();
-  }
+  Context::bootFromSession();
+} catch (ContextException $e) {
+  j(['ok'=>false,'error'=>'login_required'], 401);
+}
+
+$logId = trim($_GET['log_id'] ?? '');
+if ($logId === '') j(['ok'=>false,'error'=>'log_id_required'], 400);
+
+try {
+  $oid = new MongoDB\BSON\ObjectId($logId);
 } catch (Throwable $e) {
-  $ctx = $_SESSION['context'] ?? [];
+  j(['ok'=>false,'error'=>'invalid_log_id'], 400);
 }
 
-$module  = trim($_GET['module'] ?? '');
-$docType = trim($_GET['doc_type'] ?? '');
-$docId   = trim($_GET['doc_id'] ?? '');
-
-if ($module === '' || $docType === '' || $docId === '') {
-  j(['ok'=>false,'error'=>'module,doc_type,doc_id_required'], 400);
-}
-
-// target_key tenant bazlı
-$cdef     = $ctx['CDEF01_id'] ?? 'null';
-$period   = $ctx['period_id'] ?? 'null';
-$facility = $ctx['facility_id'] ?? 'null';
-
-$targetKey = $module . '|' . $docType . '|' . $docId . '|' . $cdef . '|' . $period . '|' . $facility;
-
-// aktif lock: expires_at > now
-$nowMs = (int) floor(microtime(true) * 1000);
-
-$lock = MongoManager::collection('LOCK01E')->findOne([
-  'target_key' => $targetKey,
-  'expires_at' => ['$gt' => new MongoDB\BSON\UTCDateTime($nowMs)]
-]);
-
-if ($lock) {
-  $lockArr = bson_to_array($lock);
-  j([
-    'ok' => true,
-    'target_key' => $targetKey,
-    'locked' => true,
-    'lock' => $lockArr
-  ]);
-}
+$doc = MongoManager::collection('UACT01E')->findOne(['_id' => $oid]);
+if (!$doc) j(['ok'=>false,'error'=>'log_not_found'], 404);
 
 j([
   'ok' => true,
-  'target_key' => $targetKey,
-  'locked' => false,
-  'lock' => null
+  'log' => bson_to_array($doc),
 ]);
