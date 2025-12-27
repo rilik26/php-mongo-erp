@@ -1,6 +1,6 @@
  <aside id="layout-menu" class="layout-menu menu-vertical menu">
           <div class="app-brand demo">
-            <a href="index.html" class="app-brand-link">
+            <a href="index.php" class="app-brand-link">
               <span class="app-brand-logo demo">
                 <span class="text-primary">
                   <svg width="32" height="18" viewBox="0 0 38 20" fill="none" xmlns="http://www.w3.org/2000/svg">
@@ -71,23 +71,23 @@
             <li class="menu-item active open">
               <a href="javascript:void(0);" class="menu-link menu-toggle">
                 <i class="menu-icon icon-base ri ri-home-smile-line"></i>
-                <div data-i18n="Dashboards">Dashboards</div>
+                <div>Sistem</div>
                 <div class="badge badge-center text-bg-danger rounded-pill ms-auto">5</div>
               </a>
               <ul class="menu-sub">
                 <li class="menu-item">
-                  <a href="app-ecommerce-dashboard.html" class="menu-link">
-                    <div data-i18n="eCommerce">eCommerce</div>
+                  <a href="lang_admin.php" class="menu-link">
+                    <div>Lang Admin</div>
                   </a>
                 </li>
                 <li class="menu-item">
-                  <a href="dashboards-crm.html" class="menu-link">
-                    <div data-i18n="CRM">CRM</div>
+                   <a href="locks.php" class="menu-link">
+                    <div>Locks</div>
                   </a>
                 </li>
                 <li class="menu-item active">
-                  <a href="index.html" class="menu-link">
-                    <div data-i18n="Analytics">Analytics</div>
+                  <a href="timeline.php" class="menu-link">
+                    <div>timeline</div>
                   </a>
                 </li>
                 <li class="menu-item">
