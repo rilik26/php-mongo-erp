@@ -1,14 +1,11 @@
 <?php
 /**
- * public/log_get_view.php
+ * public/log_get_view.php (FINAL - THEME)
  *
- * Log HTML View (V1)
  * - log_id ile API'den log getirir
  * - Kart UI + TR saat formatı
  * - Snapshot/Diff/Audit/Timeline linkleri (varsa)
- *
- * Guard:
- * - login şart
+ * - ✅ Materialize layout (header/left/header2/footer)
  */
 
 require_once __DIR__ . '/../core/bootstrap.php';
@@ -38,54 +35,83 @@ ActionLogger::info('LOG.VIEW', [
 ], $ctx);
 
 $logId = trim($_GET['log_id'] ?? '');
+
+// theme head
+require_once __DIR__ . '/../app/views/layout/header.php';
+
+function h($s): string { return htmlspecialchars((string)$s, ENT_QUOTES, 'UTF-8'); }
 ?>
-<!doctype html>
-<html>
-<head>
-  <meta charset="utf-8">
-  <title>Log</title>
-  <style>
-    body{ font-family: Arial, sans-serif; }
-    .card{ border:1px solid #eee; padding:12px; border-radius:12px; background:#fff; margin:10px 0; }
-    .bar{ display:flex; gap:10px; align-items:center; flex-wrap:wrap; margin:10px 0; }
-    .btn{ padding:6px 10px; border:1px solid #ccc; background:#fff; cursor:pointer; text-decoration:none; color:#000; border-radius:6px; display:inline-block; }
-    .btn-primary{ border-color:#1e88e5; background:#1e88e5; color:#fff; }
-    .small{ font-size:12px; color:#666; }
-    .code{ font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace; }
-    pre{ background:#0b1020; color:#eaeef7; padding:12px; border-radius:10px; overflow:auto; }
-    input{ padding:6px 8px; border:1px solid #ddd; border-radius:8px; background:#fff; color:#000; }
-    .kv{ display:grid; grid-template-columns: 160px 1fr; gap:8px; }
-    .kv div{ padding:4px 0; }
-    .k{ color:#666; font-size:12px; }
-    .v{ font-size:13px; }
-  </style>
-</head>
 <body>
+<div class="layout-wrapper layout-content-navbar">
+  <div class="layout-container">
 
-<?php require_once __DIR__ . '/../app/views/layout/header.php'; ?>
+    <?php require_once __DIR__ . '/../app/views/layout/left.php'; ?>
 
-<h3>Log View</h3>
+    <div class="layout-page">
+      <?php require_once __DIR__ . '/../app/views/layout/header2.php'; ?>
 
-<div class="card">
-  <div class="bar">
-    <label class="small">log_id</label>
-    <input id="lid" type="text" style="width:520px" value="<?php echo htmlspecialchars($logId, ENT_QUOTES, 'UTF-8'); ?>" placeholder="...">
-    <button class="btn btn-primary" id="btnLoad">Getir</button>
-    <a class="btn" href="/php-mongo-erp/public/timeline.php">Timeline</a>
+      <div class="content-wrapper">
+        <div class="container-xxl flex-grow-1 container-p-y">
+
+          <div class="row g-6">
+            <div class="col-12">
+              <div class="card">
+                <div class="card-body">
+
+                  <div class="d-flex align-items-center justify-content-between flex-wrap gap-2">
+                    <div>
+                      <h4 class="mb-1">Log View</h4>
+                      <div class="text-muted" style="font-size:12px;">
+                        Kullanıcı: <strong><?php echo h($ctx['username'] ?? ''); ?></strong>
+                        &nbsp;|&nbsp; Firma: <strong><?php echo h($ctx['CDEF01_id'] ?? ''); ?></strong>
+                        &nbsp;|&nbsp; Dönem: <strong><?php echo h($ctx['period_id'] ?? ''); ?></strong>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div class="row g-3 mt-4 align-items-end">
+                    <div class="col-lg-7">
+                      <label class="form-label">log_id</label>
+                      <input id="lid" class="form-control" type="text"
+                             value="<?php echo h($logId); ?>" placeholder="...">
+                    </div>
+                    <div class="col-lg-5 d-flex gap-2">
+                      <button class="btn btn-primary" id="btnLoad" type="button">Getir</button>
+                      <a class="btn btn-outline-primary" href="/php-mongo-erp/public/timeline.php">Timeline</a>
+                    </div>
+                  </div>
+
+                  <div id="meta" class="text-muted mt-3" style="font-size:12px;">Hazır.</div>
+
+                  <div id="links" class="d-flex flex-wrap gap-2 mt-3" style="display:none;"></div>
+
+                  <div class="card mt-4" style="background:rgba(0,0,0,.02);">
+                    <div class="card-body">
+                      <h5 class="mb-3">Özet</h5>
+                      <div id="summary" class="row g-2 text-muted" style="font-size:12px;">Yükleniyor…</div>
+                    </div>
+                  </div>
+
+                  <h5 class="mt-4 mb-2">Log JSON (pretty)</h5>
+                  <pre id="out" style="background:#0b1020;color:#eaeef7;padding:12px;border-radius:12px;overflow:auto;min-height:160px;">Yükleniyor…</pre>
+
+                </div>
+              </div>
+            </div>
+          </div>
+
+        </div>
+
+        <div class="content-backdrop fade"></div>
+      </div>
+    </div>
   </div>
 
-  <div id="meta" class="small">Hazır.</div>
-
-  <div id="links" class="bar" style="display:none;"></div>
-
-  <div class="card" style="background:#fafafa;">
-    <h4 style="margin:0 0 8px;">Özet</h4>
-    <div id="summary" class="kv small">Yükleniyor…</div>
-  </div>
-
-  <h4 style="margin:10px 0 6px;">Log JSON (pretty)</h4>
-  <pre id="out">Yükleniyor…</pre>
+  <div class="layout-overlay layout-menu-toggle"></div>
+  <div class="drag-target"></div>
 </div>
+
+<?php require_once __DIR__ . '/../app/views/layout/footer.php'; ?>
 
 <script>
 (function(){
@@ -104,7 +130,12 @@ $logId = trim($_GET['log_id'] ?? '');
     }catch(e){ return String(iso); }
   }
   function kvRow(k, v){
-    return `<div class="k">${esc(k)}</div><div class="v">${esc(v)}</div>`;
+    return `
+      <div class="col-12 col-md-6">
+        <div class="text-muted" style="font-size:11px;">${esc(k)}</div>
+        <div style="font-size:13px;word-break:break-word;">${esc(v)}</div>
+      </div>
+    `;
   }
 
   const lidEl = document.getElementById('lid');
@@ -118,7 +149,7 @@ $logId = trim($_GET['log_id'] ?? '');
     const logId = (lidEl.value || '').trim();
     if (!logId){
       outEl.textContent = 'log_id gerekli';
-      summaryEl.innerHTML = 'log_id gerekli';
+      summaryEl.innerHTML = '<div class="text-danger">log_id gerekli</div>';
       return;
     }
 
@@ -136,8 +167,8 @@ $logId = trim($_GET['log_id'] ?? '');
 
     if (!j.ok){
       outEl.textContent = JSON.stringify(j, null, 2);
-      metaEl.innerHTML = '<span style="color:red">Hata:</span> ' + esc(j.error || 'api_error');
-      summaryEl.innerHTML = '<span style="color:red">' + esc(j.error || 'api_error') + '</span>';
+      metaEl.innerHTML = '<span class="text-danger">Hata:</span> ' + esc(j.error || 'api_error');
+      summaryEl.innerHTML = '<div class="text-danger">' + esc(j.error || 'api_error') + '</div>';
       return;
     }
 
@@ -149,13 +180,13 @@ $logId = trim($_GET['log_id'] ?? '');
     const requestId = log.meta?.request_id || '';
 
     metaEl.innerHTML =
-      `<span class="code"><strong>${esc(action)}</strong></span>` +
-      ` — ${esc(result)}` +
-      ` — ${esc(fmtTR(created))}` +
-      (user ? ` — <strong>${esc(user)}</strong>` : '') +
-      (requestId ? ` — request_id: <span class="code">${esc(requestId)}</span>` : '');
+      `<span class="badge bg-label-primary">${esc(action)}</span>` +
+      ` <span class="ms-2">${esc(result)}</span>` +
+      ` <span class="ms-2">${esc(fmtTR(created))}</span>` +
+      (user ? ` <span class="ms-2"><strong>${esc(user)}</strong></span>` : '') +
+      (requestId ? ` <span class="ms-2">request_id: <span class="font-monospace">${esc(requestId)}</span></span>` : '');
 
-    // summary (readable)
+    // summary
     const c = log.context || {};
     const t = log.target || {};
     summaryEl.innerHTML = '';
@@ -178,27 +209,25 @@ $logId = trim($_GET['log_id'] ?? '');
     // links
     const jsonUrl = '/php-mongo-erp/public/api/log_get.php?log_id=' + encodeURIComponent(logId);
 
-    // refs -> snapshot/diff/audit/timeline
-    const refs = log.refs || {}; // bazı sistemlerde log’da refs olmayabilir; varsa kullan
+    const refs = log.refs || {};
     const snapId = refs.snapshot_id || null;
     const prevSnapId = refs.prev_snapshot_id || null;
 
     let linksHtml = '';
-    linksHtml += `<a class="btn" target="_blank" href="${esc(jsonUrl)}">JSON</a>`;
+    linksHtml += `<a class="btn btn-outline-primary btn-sm" target="_blank" href="${esc(jsonUrl)}">JSON</a>`;
 
     if (snapId){
-      linksHtml += `<a class="btn" target="_blank" href="/php-mongo-erp/public/snapshot_get_view.php?snapshot_id=${encodeURIComponent(snapId)}">Snapshot</a>`;
-      linksHtml += `<a class="btn" target="_blank" href="/php-mongo-erp/public/snapshot_diff_view.php?snapshot_id=${encodeURIComponent(snapId)}">Diff</a>`;
+      linksHtml += `<a class="btn btn-outline-primary btn-sm" target="_blank" href="/php-mongo-erp/public/snapshot_get_view.php?snapshot_id=${encodeURIComponent(snapId)}">Snapshot</a>`;
+      linksHtml += `<a class="btn btn-outline-primary btn-sm" target="_blank" href="/php-mongo-erp/public/snapshot_diff_view.php?snapshot_id=${encodeURIComponent(snapId)}">Diff</a>`;
       if (prevSnapId){
-        linksHtml += `<a class="btn" href="/php-mongo-erp/public/snapshot_get_view.php?snapshot_id=${encodeURIComponent(prevSnapId)}">← Önceki Snapshot</a>`;
+        linksHtml += `<a class="btn btn-outline-secondary btn-sm" href="/php-mongo-erp/public/snapshot_get_view.php?snapshot_id=${encodeURIComponent(prevSnapId)}">← Önceki Snapshot</a>`;
       }
     }
 
-    // target_key varsa audit/timeline'a bağla
     const targetKey = log.target_key || '';
     if (targetKey){
-      linksHtml += `<a class="btn" target="_blank" href="/php-mongo-erp/public/audit_view.php?target_key=${encodeURIComponent(targetKey)}">Audit</a>`;
-      linksHtml += `<a class="btn" target="_blank" href="/php-mongo-erp/public/timeline.php?target_key=${encodeURIComponent(targetKey)}">Timeline</a>`;
+      linksHtml += `<a class="btn btn-outline-primary btn-sm" target="_blank" href="/php-mongo-erp/public/audit_view.php?target_key=${encodeURIComponent(targetKey)}">Audit</a>`;
+      linksHtml += `<a class="btn btn-outline-primary btn-sm" target="_blank" href="/php-mongo-erp/public/timeline.php?target_key=${encodeURIComponent(targetKey)}">Timeline</a>`;
     }
 
     linksEl.innerHTML = linksHtml;

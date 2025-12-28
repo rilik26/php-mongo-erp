@@ -1,10 +1,12 @@
 <?php
 /**
- * public/snapshot_view.php (FINAL)
+ * public/snapshot_view.php (FINAL - THEME)
  *
  * - Snapshot JSON değil, HTML kart UI
  * - Prev / Next snapshot navigation
  * - Diff linki (prev varsa)
+ *
+ * ✅ Theme Layout: header / left / header2 / footer
  */
 
 require_once __DIR__ . '/../core/bootstrap.php';
@@ -136,133 +138,167 @@ function pretty_json($arr): string {
   return json_encode($arr, JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES|JSON_PRETTY_PRINT);
 }
 
-// data ağır olabilir, ama HTML view için göstereceğiz
 $data = $snap['data'] ?? [];
 $summary = $snap['summary'] ?? null;
 
+/** ✅ THEME HEAD */
+require_once __DIR__ . '/../app/views/layout/header.php';
 ?>
-<!doctype html>
-<html>
-<head>
-  <meta charset="utf-8">
-  <title>Snapshot View</title>
-  <style>
-    body{ font-family: Arial, sans-serif; background:#0f1220; color:#e7eaf3; margin:0; }
-    .wrap{ max-width:1200px; margin:0 auto; padding:16px; }
-    .top{ display:flex; justify-content:space-between; align-items:flex-start; gap:12px; flex-wrap:wrap; }
-    .h1{ font-size:22px; font-weight:700; margin:0; }
-    .small{ font-size:12px; color:#a7adc3; }
-    .btn{
-      padding:8px 12px; border:1px solid rgba(255,255,255,.14);
-      background:transparent; color:#e7eaf3; border-radius:10px;
-      text-decoration:none; display:inline-flex; align-items:center; gap:8px;
-      white-space:nowrap;
-    }
-    .btn:hover{ filter:brightness(1.08); }
-    .btn-primary{ background:#5865f2; border-color:transparent; color:#fff; }
-    .btn-disabled{ opacity:.45; pointer-events:none; }
-    .bar{ display:flex; gap:8px; flex-wrap:wrap; margin-top:8px; }
-    .card{
-      background:#272b40; border:1px solid rgba(255,255,255,.10);
-      border-radius:14px; padding:12px; margin-top:12px;
-    }
-    .ttl{ font-weight:700; margin-bottom:8px; }
-    .grid2{ display:grid; grid-template-columns: 1fr 1fr; gap:10px; }
-    @media (max-width: 1000px){ .grid2{ grid-template-columns:1fr; } }
-    .box{
-      background:rgba(0,0,0,.14);
-      border:1px solid rgba(255,255,255,.10);
-      border-radius:12px;
-      padding:10px;
-    }
-    .kv{ font-size:12px; color:#a7adc3; line-height:1.65; }
-    .kv b{ color:#e7eaf3; font-weight:600; }
-    .code{ font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono","Courier New", monospace; }
-    .pre{
-      white-space:pre-wrap; word-break:break-word; margin:0;
-      background:rgba(0,0,0,.22); border:1px solid rgba(255,255,255,.12);
-      padding:12px; border-radius:12px;
-      color:rgba(231,234,243,.95);
-    }
-  </style>
-</head>
 <body>
+<div class="layout-wrapper layout-content-navbar">
+  <div class="layout-container">
 
-<div class="wrap">
-  <?php require_once __DIR__ . '/../app/views/layout/header.php'; ?>
+    <?php require_once __DIR__ . '/../app/views/layout/left.php'; ?>
 
-  <div class="top">
-    <div>
-      <div class="h1">Snapshot View</div>
-      <div class="small">
-        version: <b>v<?php echo h((string)($snap['version'] ?? '-')); ?></b>
-        &nbsp;|&nbsp; time: <b><?php echo h($createdTr); ?></b>
-        &nbsp;|&nbsp; user: <b><?php echo h($user); ?></b>
-      </div>
+    <div class="layout-page">
+      <?php require_once __DIR__ . '/../app/views/layout/header2.php'; ?>
 
-      <div class="bar">
-        <?php if ($prevUrl): ?>
-          <a class="btn" href="<?php echo h($prevUrl); ?>">← Prev Snapshot</a>
-        <?php else: ?>
-          <span class="btn btn-disabled">← Prev Snapshot</span>
-        <?php endif; ?>
+      <div class="content-wrapper">
+        <div class="container-xxl flex-grow-1 container-p-y">
 
-        <?php if ($nextUrl): ?>
-          <a class="btn" href="<?php echo h($nextUrl); ?>">Next Snapshot →</a>
-        <?php else: ?>
-          <span class="btn btn-disabled">Next Snapshot →</span>
-        <?php endif; ?>
+          <style>
+            .sv-wrap{ max-width:1200px; margin:0 auto; }
+            .sv-top{ display:flex; justify-content:space-between; align-items:flex-start; gap:12px; flex-wrap:wrap; }
+            .sv-h1{ font-size:20px; font-weight:800; margin:0; }
+            .sv-small{ font-size:12px; color:rgba(0,0,0,.55); }
+            .sv-btn{
+              padding:8px 12px; border:1px solid rgba(0,0,0,.12);
+              background:#fff; color:#111; border-radius:12px;
+              text-decoration:none; display:inline-flex; align-items:center; gap:8px;
+              white-space:nowrap;
+            }
+            .sv-btn:hover{ filter:brightness(.98); }
+            .sv-btn-primary{ background:#1e88e5; border-color:#1e88e5; color:#fff; }
+            .sv-btn-disabled{ opacity:.45; pointer-events:none; }
+            .sv-bar{ display:flex; gap:8px; flex-wrap:wrap; margin-top:10px; }
 
-        <?php if ($diffUrl): ?>
-          <a class="btn btn-primary" href="<?php echo h($diffUrl); ?>">Diff</a>
-        <?php else: ?>
-          <span class="btn btn-disabled">Diff</span>
-        <?php endif; ?>
+            .sv-card{
+              background:#fff;
+              border:1px solid rgba(0,0,0,.10);
+              border-radius:16px;
+              padding:12px;
+              margin-top:12px;
+            }
+            .sv-ttl{ font-weight:800; margin-bottom:8px; }
+            .sv-grid2{ display:grid; grid-template-columns: 1fr 1fr; gap:10px; }
+            @media (max-width: 1000px){ .sv-grid2{ grid-template-columns:1fr; } }
 
-        <a class="btn" href="<?php echo h($currJsonUrl); ?>" target="_blank">JSON</a>
-      </div>
-    </div>
+            .sv-box{
+              background:rgba(0,0,0,.03);
+              border:1px solid rgba(0,0,0,.08);
+              border-radius:14px;
+              padding:10px;
+            }
+            .sv-kv{ font-size:12px; color:rgba(0,0,0,.65); line-height:1.65; }
+            .sv-kv b{ color:#111; font-weight:700; }
 
-    <div class="small">
-      target_key:<br>
-      <span class="code"><?php echo h($targetKey); ?></span>
-    </div>
-  </div>
+            .sv-code{
+              font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono","Courier New", monospace;
+              font-size:12px;
+              background:rgba(0,0,0,.05);
+              border:1px solid rgba(0,0,0,.10);
+              padding:2px 8px;
+              border-radius:999px;
+            }
 
-  <div class="card">
-    <div class="ttl">Target</div>
-    <div class="grid2">
-      <div class="box">
-        <div class="kv">
-          <div><b>module</b>: <span class="code"><?php echo h($target['module'] ?? '-'); ?></span></div>
-          <div><b>doc_type</b>: <span class="code"><?php echo h($target['doc_type'] ?? '-'); ?></span></div>
-          <div><b>doc_id</b>: <span class="code"><?php echo h($target['doc_id'] ?? '-'); ?></span></div>
-          <div><b>doc_no</b>: <span class="code"><?php echo h($target['doc_no'] ?? '-'); ?></span></div>
+            .sv-pre{
+              white-space:pre-wrap; word-break:break-word; margin:0;
+              background:rgba(0,0,0,.04);
+              border:1px solid rgba(0,0,0,.10);
+              padding:12px; border-radius:14px;
+              color:rgba(0,0,0,.90);
+              font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono","Courier New", monospace;
+              font-size:12px;
+            }
+          </style>
+
+          <div class="sv-wrap">
+
+            <div class="sv-top">
+              <div>
+                <div class="sv-h1">Snapshot View</div>
+                <div class="sv-small">
+                  version: <b>v<?php echo h((string)($snap['version'] ?? '-')); ?></b>
+                  &nbsp;|&nbsp; time: <b><?php echo h($createdTr); ?></b>
+                  &nbsp;|&nbsp; user: <b><?php echo h($user); ?></b>
+                </div>
+
+                <div class="sv-bar">
+                  <?php if ($prevUrl): ?>
+                    <a class="sv-btn" href="<?php echo h($prevUrl); ?>">← Prev Snapshot</a>
+                  <?php else: ?>
+                    <span class="sv-btn sv-btn-disabled">← Prev Snapshot</span>
+                  <?php endif; ?>
+
+                  <?php if ($nextUrl): ?>
+                    <a class="sv-btn" href="<?php echo h($nextUrl); ?>">Next Snapshot →</a>
+                  <?php else: ?>
+                    <span class="sv-btn sv-btn-disabled">Next Snapshot →</span>
+                  <?php endif; ?>
+
+                  <?php if ($diffUrl): ?>
+                    <a class="sv-btn sv-btn-primary" href="<?php echo h($diffUrl); ?>">Diff</a>
+                  <?php else: ?>
+                    <span class="sv-btn sv-btn-disabled">Diff</span>
+                  <?php endif; ?>
+
+                  <a class="sv-btn" href="<?php echo h($currJsonUrl); ?>" target="_blank">JSON</a>
+                </div>
+              </div>
+
+              <div class="sv-small">
+                target_key:<br>
+                <span class="sv-code"><?php echo h($targetKey); ?></span>
+              </div>
+            </div>
+
+            <div class="sv-card">
+              <div class="sv-ttl">Target</div>
+              <div class="sv-grid2">
+                <div class="sv-box">
+                  <div class="sv-kv">
+                    <div><b>module</b>: <span class="sv-code"><?php echo h($target['module'] ?? '-'); ?></span></div>
+                    <div><b>doc_type</b>: <span class="sv-code"><?php echo h($target['doc_type'] ?? '-'); ?></span></div>
+                    <div><b>doc_id</b>: <span class="sv-code"><?php echo h($target['doc_id'] ?? '-'); ?></span></div>
+                    <div><b>doc_no</b>: <span class="sv-code"><?php echo h($target['doc_no'] ?? '-'); ?></span></div>
+                  </div>
+                </div>
+                <div class="sv-box">
+                  <div class="sv-kv">
+                    <div><b>hash</b>: <span class="sv-code"><?php echo h($snap['hash'] ?? '-'); ?></span></div>
+                    <div><b>prev_hash</b>: <span class="sv-code"><?php echo h($snap['prev_hash'] ?? '-'); ?></span></div>
+                    <div><b>prev_snapshot_id</b>: <span class="sv-code"><?php echo h($prevId ?: '-'); ?></span></div>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <?php if (is_array($summary) && !empty($summary)): ?>
+              <div class="sv-card">
+                <div class="sv-ttl">Summary</div>
+                <pre class="sv-pre"><?php echo h(pretty_json($summary)); ?></pre>
+              </div>
+            <?php endif; ?>
+
+            <div class="sv-card">
+              <div class="sv-ttl">Data</div>
+              <pre class="sv-pre"><?php echo h(pretty_json($data)); ?></pre>
+            </div>
+
+          </div>
+
         </div>
-      </div>
-      <div class="box">
-        <div class="kv">
-          <div><b>hash</b>: <span class="code"><?php echo h($snap['hash'] ?? '-'); ?></span></div>
-          <div><b>prev_hash</b>: <span class="code"><?php echo h($snap['prev_hash'] ?? '-'); ?></span></div>
-          <div><b>prev_snapshot_id</b>: <span class="code"><?php echo h($prevId ?: '-'); ?></span></div>
-        </div>
+
+        <div class="content-backdrop fade"></div>
       </div>
     </div>
   </div>
 
-  <?php if (is_array($summary) && !empty($summary)): ?>
-    <div class="card">
-      <div class="ttl">Summary</div>
-      <pre class="pre"><?php echo h(pretty_json($summary)); ?></pre>
-    </div>
-  <?php endif; ?>
-
-  <div class="card">
-    <div class="ttl">Data</div>
-    <pre class="pre"><?php echo h(pretty_json($data)); ?></pre>
-  </div>
-
+  <div class="layout-overlay layout-menu-toggle"></div>
+  <div class="drag-target"></div>
 </div>
+
+<?php require_once __DIR__ . '/../app/views/layout/footer.php'; ?>
 
 </body>
 </html>

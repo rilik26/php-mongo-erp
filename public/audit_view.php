@@ -1,4 +1,5 @@
 <?php
+require_once __DIR__ . '/../app/views/layout/header.php';
 /**
  * public/audit_view.php (FINAL)
  *
@@ -7,13 +8,8 @@
  * - ✅ GENDOC zinciri: SNAP01E üzerinden V1→V2→V3 (tüm versiyonlar)
  * - Snapshot / Diff / Timeline linkleri
  * - BSONDocument -> array stabil
+ * - facility filtre stabil (facility varsa: equal + null + missing)
  */
-
-require_once __DIR__ . '/../core/bootstrap.php';
-require_once __DIR__ . '/../core/auth/SessionManager.php';
-require_once __DIR__ . '/../core/base/Context.php';
-require_once __DIR__ . '/../core/base/ContextException.php';
-require_once __DIR__ . '/../core/action/ActionLogger.php';
 
 SessionManager::start();
 
@@ -35,7 +31,13 @@ ActionLogger::info('AUDIT.VIEW', [
   'source' => 'public/audit_view.php',
 ], $ctx);
 
-function esc($s): string { return htmlspecialchars((string)$s, ENT_QUOTES, 'UTF-8'); }
+// --- helpers (h/esc çakışma önlemi) ---
+if (!function_exists('h')) {
+  function h($s): string { return htmlspecialchars((string)$s, ENT_QUOTES, 'UTF-8'); }
+}
+if (!function_exists('esc')) {
+  function esc($s): string { return htmlspecialchars((string)$s, ENT_QUOTES, 'UTF-8'); }
+}
 
 function bson_to_array($v) {
   if ($v instanceof MongoDB\Model\BSONDocument || $v instanceof MongoDB\Model\BSONArray) {
@@ -79,12 +81,11 @@ $facility = $ctx['facility_id'] ?? null;
 /**
  * facility filtre stabil:
  * - facility yoksa filtreleme
- * - facility varsa: hem eşit olanları hem de field missing/null olanları göster
+ * - facility varsa: equal + null + missing birlikte göster
  */
 function apply_facility_filter(array &$filter, $facility): void {
   if ($facility === null || $facility === '') return;
 
-  // zaten $or varsa genişlet
   if (isset($filter['$and']) && is_array($filter['$and'])) {
     $filter['$and'][] = [
       '$or' => [
@@ -96,7 +97,6 @@ function apply_facility_filter(array &$filter, $facility): void {
     return;
   }
 
-  // $and yoksa oluştur
   $filter['$and'] = [
     [
       '$or' => [
@@ -129,7 +129,6 @@ if ($module !== '' && $docType !== '' && $docId !== '') {
     ];
   }
 
-  // facility stabil
   apply_facility_filter($snapFilter, $facility);
 
   try {
@@ -156,7 +155,7 @@ if ($module !== '' && $docType !== '' && $docId !== '') {
   }
 }
 
-// ---- events (optional list) ----
+// ---- events ----
 $events = [];
 $evErr = null;
 
@@ -176,7 +175,6 @@ if ($module !== '' && $docType !== '' && $docId !== '') {
     ];
   }
 
-  // facility stabil
   apply_facility_filter($evFilter, $facility);
 
   try {
@@ -219,264 +217,251 @@ function pick_target_meta(array $snapshots): array {
 
 $meta = pick_target_meta($snapshots);
 
+// ❌ ikinci header include kaldırıldı (zaten dosyanın en başında var)
+// require_once __DIR__ . '/../app/views/layout/header.php';
 ?>
-<!doctype html>
-<html>
-<head>
-  <meta charset="utf-8">
-  <title>Audit View</title>
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <style>
-    :root{
-      --bg:#0f1220;
-      --panel:#171a2c;
-      --panel2:#1d2140;
-      --text:#e8ebf6;
-      --muted:rgba(232,235,246,.65);
-      --border:rgba(255,255,255,.12);
-      --primary:#5865f2;
-      --chip:#2a2f55;
-    }
-    body{ margin:0; background:var(--bg); color:var(--text); font-family: Arial, sans-serif; }
-    .wrap{ max-width:1200px; margin:0 auto; padding:16px; }
-    h1{ margin:0 0 10px; font-size:28px; }
-    .sub{ color:var(--muted); font-size:13px; margin-bottom:12px; }
-    .bar{
-      display:grid;
-      grid-template-columns: 1fr 1fr 1fr auto auto;
-      gap:10px;
-      align-items:center;
-      margin: 10px 0 14px;
-    }
-    @media (max-width: 980px){ .bar{ grid-template-columns:1fr 1fr; } }
-    .in{
-      width:100%; height:42px; box-sizing:border-box;
-      background:var(--panel);
-      color:var(--text);
-      border:1px solid var(--border);
-      border-radius:12px;
-      padding:0 12px;
-      outline:none;
-    }
-    .btn{
-      height:42px;
-      padding:0 14px;
-      border-radius:12px;
-      border:1px solid var(--border);
-      background:transparent;
-      color:var(--text);
-      cursor:pointer;
-      text-decoration:none;
-      display:inline-flex;
-      align-items:center;
-      justify-content:center;
-      white-space:nowrap;
-      gap:8px;
-    }
-    .btn-primary{ background:var(--primary); border-color:transparent; color:#fff; }
-    .card{
-      background:var(--panel);
-      border:1px solid var(--border);
-      border-radius:16px;
-      padding:14px;
-      margin-top:12px;
-    }
-    .chips{ display:flex; gap:8px; flex-wrap:wrap; margin-top:8px; }
-    .chip{
-      background:var(--chip);
-      border:1px solid var(--border);
-      padding:6px 10px;
-      border-radius:999px;
-      font-size:12px;
-      color:rgba(232,235,246,.95);
-    }
-    .code{
-      font-family: ui-monospace, Menlo, Consolas, monospace;
-      background:rgba(0,0,0,.25);
-      border:1px solid var(--border);
-      padding:2px 8px;
-      border-radius:999px;
-      font-size:12px;
-      color:#fff;
-    }
-    .muted{ color:var(--muted); font-size:13px; }
-    .chain{
-      display:flex;
-      flex-wrap:wrap;
-      gap:10px;
-      align-items:center;
-      line-height:1.8;
-    }
-    .chain a{ color:#fff; text-decoration:none; }
-    .chain a:hover{ text-decoration:underline; }
-    .node{
-      display:inline-flex;
-      align-items:center;
-      gap:8px;
-      padding:6px 10px;
-      border-radius:999px;
-      border:1px solid var(--border);
-      background:rgba(255,255,255,.04);
-      font-size:12px;
-    }
-    .arrow{ color:rgba(232,235,246,.55); font-size:12px; display:inline-flex; align-items:center; gap:6px; }
-    table{ border-collapse:collapse; width:100%; }
-    th,td{ border:1px solid var(--border); padding:8px; vertical-align:top; }
-    th{ background:rgba(255,255,255,.06); text-align:left; }
-    .small{ font-size:12px; color:rgba(232,235,246,.75); }
-  </style>
-</head>
-<body>
-<div class="wrap">
 
-  <h1>Audit View</h1>
-  <div class="sub">
-    Firma: <b><?php echo esc($ctx['CDEF01_id'] ?? ''); ?></b>
-    &nbsp;|&nbsp; Dönem: <b><?php echo esc($ctx['period_id'] ?? ''); ?></b>
-    &nbsp;|&nbsp; Kullanıcı: <b><?php echo esc($ctx['username'] ?? ''); ?></b>
+<body>
+<div class="layout-wrapper layout-content-navbar">
+  <div class="layout-container">
+
+    <?php require_once __DIR__ . '/../app/views/layout/left.php'; ?>
+
+    <div class="layout-page">
+
+      <?php require_once __DIR__ . '/../app/views/layout/header2.php'; ?>
+
+      <div class="content-wrapper">
+        <div class="container-xxl flex-grow-1 container-p-y">
+
+          <div class="row g-6">
+
+            <div class="col-md-12">
+              <div class="card card-border-shadow-primary">
+                <div class="card-body">
+                  <div class="d-flex align-items-center justify-content-between flex-wrap gap-2">
+                    <div>
+                      <h4 class="mb-1">Audit View</h4>
+                      <div class="small-muted">
+                        Firma: <b><?php echo esc($ctx['CDEF01_id'] ?? ''); ?></b>
+                        &nbsp;|&nbsp; Dönem: <b><?php echo esc($ctx['period_id'] ?? ''); ?></b>
+                        &nbsp;|&nbsp; Kullanıcı: <b><?php echo esc($ctx['username'] ?? ''); ?></b>
+                      </div>
+                    </div>
+                  </div>
+
+                  <form method="GET" class="row g-3 mt-3">
+                    <div class="col-md-3">
+                      <label class="form-label">module</label>
+                      <input class="form-control" name="module" value="<?php echo esc($module); ?>" placeholder="örn: gen">
+                    </div>
+                    <div class="col-md-3">
+                      <label class="form-label">doc_type</label>
+                      <input class="form-control" name="doc_type" value="<?php echo esc($docType); ?>" placeholder="örn: GENDOC01T">
+                    </div>
+                    <div class="col-md-3">
+                      <label class="form-label">doc_id</label>
+                      <input class="form-control" name="doc_id" value="<?php echo esc($docId); ?>" placeholder="örn: DOC-001">
+                    </div>
+                    <div class="col-md-3 d-flex gap-2 align-items-end">
+                      <button class="btn btn-primary" type="submit">Getir</button>
+                      <a class="btn btn-outline-primary" href="/php-mongo-erp/public/audit_view.php">Sıfırla</a>
+                    </div>
+                  </form>
+
+                </div>
+              </div>
+            </div>
+
+            <?php if ($module === '' || $docType === '' || $docId === ''): ?>
+
+              <div class="col-md-12">
+                <div class="alert alert-primary" role="alert">
+                  module / doc_type / doc_id girip “Getir” de.
+                </div>
+              </div>
+
+            <?php else: ?>
+
+              <!-- TARGET CARD -->
+              <div class="col-md-12">
+                <div class="card">
+                  <div class="card-body">
+                    <div class="d-flex justify-content-between align-items-center flex-wrap gap-2">
+                      <div>
+                        <b>Target:</b>
+                        <span class="code-pill"><?php echo esc($module); ?></span>
+                        /
+                        <span class="code-pill"><?php echo esc($docType); ?></span>
+                        /
+                        <span class="code-pill"><?php echo esc($docId); ?></span>
+                      </div>
+                      <div class="d-flex gap-2">
+                        <a class="btn btn-outline-primary" target="_blank"
+                           href="/php-mongo-erp/public/timeline.php?module=<?php echo urlencode($module); ?>&doc_type=<?php echo urlencode($docType); ?>&doc_id=<?php echo urlencode($docId); ?>">
+                          Timeline
+                        </a>
+                      </div>
+                    </div>
+
+                    <div class="d-flex gap-2 flex-wrap mt-3">
+                      <?php if (($meta['doc_no'] ?? '') !== ''): ?>
+                        <span class="badge bg-label-primary">doc_no: <b><?php echo esc($meta['doc_no']); ?></b></span>
+                      <?php endif; ?>
+                      <?php if (($meta['doc_title'] ?? '') !== ''): ?>
+                        <span class="badge bg-label-info">title: <b><?php echo esc($meta['doc_title']); ?></b></span>
+                      <?php endif; ?>
+                      <?php if (($meta['status'] ?? '') !== ''): ?>
+                        <span class="badge bg-label-warning">status: <b><?php echo esc($meta['status']); ?></b></span>
+                      <?php endif; ?>
+                      <span class="badge bg-label-secondary">snapshots: <b><?php echo (int)count($snapshots); ?></b></span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <!-- SNAP CHAIN -->
+              <div class="col-md-12">
+                <div class="card">
+                  <div class="card-header">
+                    <h5 class="mb-0">Snapshot Zinciri (V1 → V2 → ...)</h5>
+                  </div>
+                  <div class="card-body">
+
+                    <?php if ($snapErr): ?>
+                      <div class="alert alert-danger">Snapshot query error: <?php echo esc($snapErr); ?></div>
+                    <?php elseif (empty($snapshots)): ?>
+                      <div class="alert alert-warning">Snapshot bulunamadı.</div>
+                    <?php else: ?>
+
+                      <div class="chainwrap">
+                        <?php
+                          $prevVer = null;
+                          foreach ($snapshots as $i => $s):
+                            $sid = (string)($s['_id'] ?? '');
+                            $ver = (int)($s['version'] ?? ($i+1));
+                            $created = fmt_tr($s['created_at'] ?? '');
+                            $who = (string)($s['context']['username'] ?? '-');
+
+                            $snapHref = '/php-mongo-erp/public/snapshot_view.php?snapshot_id=' . rawurlencode($sid);
+
+                            if ($prevVer !== null && $sid) {
+                              $diffHref = '/php-mongo-erp/public/snapshot_diff_view.php?snapshot_id=' . rawurlencode($sid);
+                              echo '<span class="arrow">→ <a target="_blank" href="'.esc($diffHref).'">Diff (v'.(int)$prevVer.'→v'.(int)$ver.')</a></span>';
+                            }
+                        ?>
+                            <span class="chainnode">
+                              <a target="_blank" href="<?php echo esc($snapHref); ?>">
+                                <b>V<?php echo (int)$ver; ?></b>
+                              </a>
+                              <span class="small-muted"><?php echo esc($created); ?></span>
+                              <span class="small-muted">— <?php echo esc($who); ?></span>
+                            </span>
+                        <?php
+                            $prevVer = $ver;
+                          endforeach;
+                        ?>
+                      </div>
+
+                      <div class="small-muted mt-3">
+                        Not: Diff linki, “sonraki snapshot” üzerinden hesaplanır. (V2 linki V1→V2 diff’idir.)
+                      </div>
+
+                    <?php endif; ?>
+
+                  </div>
+                </div>
+              </div>
+
+              <!-- EVENTS -->
+              <div class="col-md-12">
+                <div class="card">
+                  <div class="card-header d-flex justify-content-between align-items-center flex-wrap gap-2">
+                    <h5 class="mb-0">Son Event’ler</h5>
+                    <div class="small-muted">limit: <?php echo (int)$limitEvents; ?></div>
+                  </div>
+                  <div class="card-body">
+
+                    <?php if ($evErr): ?>
+                      <div class="alert alert-danger">Event query error: <?php echo esc($evErr); ?></div>
+                    <?php elseif (empty($events)): ?>
+                      <div class="alert alert-warning">Event bulunamadı.</div>
+                    <?php else: ?>
+
+                      <div class="table-responsive">
+                        <table class="table table-bordered">
+                          <thead>
+                            <tr>
+                              <th style="width:220px;">Zaman</th>
+                              <th style="width:220px;">Kullanıcı</th>
+                              <th style="width:260px;">event_code</th>
+                              <th>Özet</th>
+                              <th style="width:240px;">Link</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                          <?php foreach ($events as $ev):
+                            $t = fmt_tr($ev['created_at'] ?? '');
+                            $u = (string)($ev['context']['username'] ?? '-');
+                            $code = (string)($ev['event_code'] ?? '');
+                            $sum = $ev['data']['summary'] ?? null;
+
+                            $sumTxt = '';
+                            if (is_array($sum)) {
+                              $sumTxt = json_encode($sum, JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES);
+                            } elseif ($sum !== null) {
+                              $sumTxt = (string)$sum;
+                            }
+
+                            $refs = (array)($ev['refs'] ?? []);
+                            $logId = (string)($refs['log_id'] ?? '');
+                            $snapId = (string)($refs['snapshot_id'] ?? '');
+                          ?>
+                            <tr>
+                              <td class="small-muted"><?php echo esc($t); ?></td>
+                              <td class="small-muted"><?php echo esc($u); ?></td>
+                              <td><span class="code-pill"><?php echo esc($code); ?></span></td>
+                              <td class="small-muted"><?php echo esc($sumTxt ?: '-'); ?></td>
+                              <td class="small-muted">
+                                <?php if ($logId): ?>
+                                  <a target="_blank" href="/php-mongo-erp/public/log_view.php?log_id=<?php echo esc(urlencode($logId)); ?>">LOG</a>
+                                <?php else: ?>
+                                  LOG -
+                                <?php endif; ?>
+                                &nbsp;|&nbsp;
+                                <?php if ($snapId): ?>
+                                  <a target="_blank" href="/php-mongo-erp/public/snapshot_view.php?snapshot_id=<?php echo esc(urlencode($snapId)); ?>">SNAP</a>
+                                <?php else: ?>
+                                  SNAP -
+                                <?php endif; ?>
+                              </td>
+                            </tr>
+                          <?php endforeach; ?>
+                          </tbody>
+                        </table>
+                      </div>
+
+                    <?php endif; ?>
+
+                  </div>
+                </div>
+              </div>
+
+            <?php endif; ?>
+
+          </div>
+        </div>
+
+        <div class="content-backdrop fade"></div>
+      </div>
+
+    </div>
   </div>
 
-  <form method="GET" class="bar">
-    <input class="in" name="module"  value="<?php echo esc($module); ?>" placeholder="module (örn: gen)">
-    <input class="in" name="doc_type"value="<?php echo esc($docType); ?>" placeholder="doc_type (örn: GENDOC01T)">
-    <input class="in" name="doc_id"  value="<?php echo esc($docId); ?>" placeholder="doc_id (örn: DOC-001)">
-    <button class="btn btn-primary" type="submit">Getir</button>
-    <a class="btn" href="/php-mongo-erp/public/audit_view.php">Sıfırla</a>
-  </form>
-
-  <?php if ($module === '' || $docType === '' || $docId === ''): ?>
-    <div class="card">
-      <div class="muted">module / doc_type / doc_id girip “Getir” de.</div>
-    </div>
-  <?php else: ?>
-
-    <div class="card">
-      <div style="display:flex; gap:10px; align-items:center; flex-wrap:wrap;">
-        <div><b>Target</b>: <span class="code"><?php echo esc($module); ?></span> / <span class="code"><?php echo esc($docType); ?></span> / <span class="code"><?php echo esc($docId); ?></span></div>
-        <span style="flex:1"></span>
-        <a class="btn" target="_blank" href="/php-mongo-erp/public/timeline.php?module=<?php echo urlencode($module); ?>&doc_type=<?php echo urlencode($docType); ?>&doc_id=<?php echo urlencode($docId); ?>">Timeline</a>
-      </div>
-
-      <div class="chips">
-        <?php if (($meta['doc_no'] ?? '') !== ''): ?>
-          <span class="chip">doc_no: <b><?php echo esc($meta['doc_no']); ?></b></span>
-        <?php endif; ?>
-        <?php if (($meta['doc_title'] ?? '') !== ''): ?>
-          <span class="chip">title: <b><?php echo esc($meta['doc_title']); ?></b></span>
-        <?php endif; ?>
-        <?php if (($meta['status'] ?? '') !== ''): ?>
-          <span class="chip">status: <b><?php echo esc($meta['status']); ?></b></span>
-        <?php endif; ?>
-        <span class="chip">snapshots: <b><?php echo (int)count($snapshots); ?></b></span>
-      </div>
-    </div>
-
-    <div class="card">
-      <h3 style="margin:0 0 10px;">GENDOC Zinciri (V1 → V2 → V3)</h3>
-
-      <?php if ($snapErr): ?>
-        <div class="small">Snapshot query error: <?php echo esc($snapErr); ?></div>
-      <?php elseif (empty($snapshots)): ?>
-        <div class="small">Snapshot bulunamadı.</div>
-      <?php else: ?>
-
-        <div class="chain">
-          <?php
-            $prevSnapId = null;
-            $prevVer = null;
-
-            foreach ($snapshots as $i => $s):
-              $sid = (string)($s['_id'] ?? '');
-              $ver2 = (int)($s['version'] ?? ($i+1));
-              $created = fmt_tr($s['created_at'] ?? '');
-              $who = (string)($s['context']['username'] ?? '-');
-
-              $snapHref = '/php-mongo-erp/public/snapshot_view.php?snapshot_id=' . rawurlencode($sid);
-
-              if ($prevSnapId && $sid) {
-                $diffHref = '/php-mongo-erp/public/snapshot_diff_view.php?snapshot_id=' . rawurlencode($sid);
-                echo '<span class="arrow">→ <a class="small" target="_blank" href="'.esc($diffHref).'">Diff (v'.(int)$prevVer.'→v'.(int)$ver2.')</a></span>';
-              }
-          ?>
-              <span class="node">
-                <a target="_blank" href="<?php echo esc($snapHref); ?>">
-                  <b>V<?php echo (int)$ver2; ?></b>
-                </a>
-                <span class="small"><?php echo esc($created); ?></span>
-                <span class="small">— <?php echo esc($who); ?></span>
-              </span>
-          <?php
-              $prevSnapId = $sid;
-              $prevVer = $ver2;
-            endforeach;
-          ?>
-        </div>
-
-        <div class="small" style="margin-top:10px;">
-          Not: Okların üstündeki “Diff” linki, sonraki snapshot’ın diff ekranını açar. (v2 linki v1→v2 diff’idir)
-        </div>
-
-      <?php endif; ?>
-    </div>
-
-    <div class="card">
-      <h3 style="margin:0 0 10px;">Son Event’ler</h3>
-
-      <?php if ($evErr): ?>
-        <div class="small">Event query error: <?php echo esc($evErr); ?></div>
-      <?php elseif (empty($events)): ?>
-        <div class="small">Event bulunamadı.</div>
-      <?php else: ?>
-        <table>
-          <tr>
-            <th style="width:220px;">Zaman</th>
-            <th style="width:220px;">Kullanıcı</th>
-            <th style="width:260px;">event_code</th>
-            <th>Özet</th>
-            <th style="width:240px;">Link</th>
-          </tr>
-          <?php foreach ($events as $ev):
-            $t = fmt_tr($ev['created_at'] ?? '');
-            $u = (string)($ev['context']['username'] ?? '-');
-            $code = (string)($ev['event_code'] ?? '');
-            $sum = $ev['data']['summary'] ?? null;
-            $sumTxt = '';
-            if (is_array($sum)) {
-              $sumTxt = json_encode($sum, JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES);
-            } elseif ($sum !== null) {
-              $sumTxt = (string)$sum;
-            }
-
-            $refs = (array)($ev['refs'] ?? []);
-            $logId = (string)($refs['log_id'] ?? '');
-            $snapId = (string)($refs['snapshot_id'] ?? '');
-          ?>
-            <tr>
-              <td class="small"><?php echo esc($t); ?></td>
-              <td class="small"><?php echo esc($u); ?></td>
-              <td><span class="code"><?php echo esc($code); ?></span></td>
-              <td class="small"><?php echo esc($sumTxt ?: '-'); ?></td>
-              <td class="small">
-                <?php if ($logId): ?>
-                  <a target="_blank" href="/php-mongo-erp/public/log_view.php?log_id=<?php echo esc(urlencode($logId)); ?>">LOG</a>
-                <?php else: ?>
-                  LOG -
-                <?php endif; ?>
-                &nbsp;|&nbsp;
-                <?php if ($snapId): ?>
-                  <a target="_blank" href="/php-mongo-erp/public/snapshot_view.php?snapshot_id=<?php echo esc(urlencode($snapId)); ?>">SNAP</a>
-                <?php else: ?>
-                  SNAP -
-                <?php endif; ?>
-              </td>
-            </tr>
-          <?php endforeach; ?>
-        </table>
-      <?php endif; ?>
-    </div>
-
-  <?php endif; ?>
-
+  <div class="layout-overlay layout-menu-toggle"></div>
+  <div class="drag-target"></div>
 </div>
+
+<?php require_once __DIR__ . '/../app/views/layout/footer.php'; ?>
 </body>
 </html>

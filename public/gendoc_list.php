@@ -7,6 +7,8 @@
  * - Lock ikonları: lock_status.php (bulk)
  * - Linkler: gendoc_admin / timeline / audit_view / latest snapshot
  * - ✅ Yeni modal (doc_id input)
+ *
+ * ✅ Theme layout uyumlu: header + left + header2 + footer
  */
 
 require_once __DIR__ . '/../core/bootstrap.php';
@@ -35,7 +37,9 @@ ActionLogger::info('GENDOC.LIST.VIEW', [
   'source' => 'public/gendoc_list.php',
 ], $ctx);
 
-function h($s): string { return htmlspecialchars((string)$s, ENT_QUOTES, 'UTF-8'); }
+if (!function_exists('h')) {
+  function h($s): string { return htmlspecialchars((string)$s, ENT_QUOTES, 'UTF-8'); }
+}
 
 function bson_to_array($v) {
   if ($v instanceof MongoDB\Model\BSONDocument || $v instanceof MongoDB\Model\BSONArray) $v = $v->getArrayCopy();
@@ -105,13 +109,13 @@ if ($q !== '') {
   $rx = new MongoDB\BSON\Regex(preg_quote($q), 'i');
   $filter['$and'][] = [
     '$or' => [
-      ['target.doc_id'   => $rx],
-      ['header.doc_no'   => $rx],
-      ['header.title'    => $rx],
-      ['header.status'   => $rx],
-      ['target.doc_no'   => $rx],
-      ['target.doc_title'=> $rx],
-      ['target.status'   => $rx],
+      ['target.doc_id'    => $rx],
+      ['header.doc_no'    => $rx],
+      ['header.title'     => $rx],
+      ['header.status'    => $rx],
+      ['target.doc_no'    => $rx],
+      ['target.doc_title' => $rx],
+      ['target.status'    => $rx],
     ]
   ];
 }
@@ -174,170 +178,216 @@ function find_latest_snapshot_id(string $module, string $docType, string $docId,
   return !empty($doc['_id']) ? (string)$doc['_id'] : null;
 }
 
-$withSnapshot = true;
-if ($withSnapshot) {
-  foreach ($rows as &$r) {
-    $t = (array)($r['target'] ?? []);
-    $did = (string)($t['doc_id'] ?? '');
-    $r['_latest_snapshot_id'] = $did !== '' ? find_latest_snapshot_id($module, $docType, $did, $ctx) : null;
-  }
-  unset($r);
+// snapshot id attach
+foreach ($rows as &$r) {
+  $t = (array)($r['target'] ?? []);
+  $did = (string)($t['doc_id'] ?? '');
+  $r['_latest_snapshot_id'] = $did !== '' ? find_latest_snapshot_id($module, $docType, $did, $ctx) : null;
 }
+unset($r);
+
+// ✅ Theme header include (HTML head + core css/js)
+require_once __DIR__ . '/../app/views/layout/header.php';
 ?>
-<!doctype html>
-<html>
-<head>
-  <meta charset="utf-8">
-  <title>GENDOC List</title>
 
-  <link rel="stylesheet" href="https://cdn.datatables.net/1.13.8/css/jquery.dataTables.min.css">
-  <script src="https://code.jquery.com/jquery-3.7.1.min.js"></script>
-  <script src="https://cdn.datatables.net/1.13.8/js/jquery.dataTables.min.js"></script>
+<!-- DataTables CDN (kalsın) -->
+<link rel="stylesheet" href="https://cdn.datatables.net/1.13.8/css/jquery.dataTables.min.css">
+<script src="https://code.jquery.com/jquery-3.7.1.min.js"></script>
+<script src="https://cdn.datatables.net/1.13.8/js/jquery.dataTables.min.js"></script>
 
-  <style>
-    body{ font-family: Arial, sans-serif; }
-    .bar{ display:flex; gap:10px; align-items:center; flex-wrap:wrap; margin:10px 0; }
-    .in, select{ height:38px; padding:0 10px; border:1px solid #ddd; border-radius:10px; outline:none; }
-    .btn{ height:38px; padding:0 12px; border-radius:10px; border:1px solid #ccc; background:#fff; cursor:pointer; text-decoration:none; color:#111; display:inline-flex; align-items:center; gap:8px; }
-    .btn-primary{ border-color:#1e88e5; background:#1e88e5; color:#fff; }
-    .small{ font-size:12px; color:#666; }
-    table { border-collapse: collapse; width: 100%; }
-    th, td { border:1px solid #ddd; padding:8px; vertical-align: top; }
-    th { background:#f7f7f7; text-align:left; }
-    .code{ font-family: ui-monospace, Menlo, Consolas, monospace; font-size:12px; }
-    .pill{ display:inline-block; padding:3px 8px; border-radius:999px; font-size:12px; border:1px solid #eee; background:#fafafa; }
-    .lock-cell{ text-align:center; width:44px; }
-    .actions{ display:flex; gap:8px; flex-wrap:wrap; }
-  </style>
-</head>
+<style>
+  /* sadece gerekli ufak dokunuşlar */
+  .code { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 12px; }
+  .pill { display:inline-block; padding:3px 8px; border-radius:999px; font-size:12px; border:1px solid rgba(0,0,0,.08); background:rgba(0,0,0,.02); }
+  .lock-cell{ text-align:center; width:44px; }
+  .actions{ display:flex; gap:8px; flex-wrap:wrap; }
+  table.dataTable thead th { background: rgba(0,0,0,.03); }
+</style>
+
 <body>
+<div class="layout-wrapper layout-content-navbar">
+  <div class="layout-container">
 
-<?php require_once __DIR__ . '/../app/views/layout/header.php'; ?>
+    <?php require_once __DIR__ . '/../app/views/layout/left.php'; ?>
 
-<h3>GENDOC List</h3>
+    <div class="layout-page">
+      <?php require_once __DIR__ . '/../app/views/layout/header2.php'; ?>
 
-<div class="small">
-  Tenant: <b><?php echo h($ctx['CDEF01_id'] ?? ''); ?></b>
-  | Period: <b><?php echo h($ctx['period_id'] ?? ''); ?></b>
-  | User: <b><?php echo h($ctx['username'] ?? ''); ?></b>
+      <div class="content-wrapper">
+        <div class="container-xxl flex-grow-1 container-p-y">
+
+          <div class="row g-6">
+
+            <div class="col-md-12">
+              <div class="card card-border-shadow-primary">
+                <div class="card-body">
+
+                  <div class="d-flex align-items-center justify-content-between flex-wrap gap-2">
+                    <div>
+                      <h4 class="mb-1">GENDOC List</h4>
+                      <div class="text-muted" style="font-size:12px;">
+                        Tenant: <b><?php echo h($ctx['CDEF01_id'] ?? ''); ?></b>
+                        &nbsp;|&nbsp; Period: <b><?php echo h($ctx['period_id'] ?? ''); ?></b>
+                        &nbsp;|&nbsp; User: <b><?php echo h($ctx['username'] ?? ''); ?></b>
+                      </div>
+                    </div>
+                  </div>
+
+                  <form method="GET" class="row g-3 mt-4">
+                    <div class="col-md-2">
+                      <label class="form-label">module</label>
+                      <select class="form-select" name="module">
+                        <?php foreach (['gen','i18n','stock','inv'] as $m): ?>
+                          <option value="<?php echo h($m); ?>" <?php echo ($m===$module?'selected':''); ?>>
+                            <?php echo h($m); ?>
+                          </option>
+                        <?php endforeach; ?>
+                      </select>
+                    </div>
+
+                    <div class="col-md-3">
+                      <label class="form-label">doc_type</label>
+                      <input class="form-control" name="doc_type" value="<?php echo h($docType); ?>" placeholder="örn: GENDOC01T">
+                    </div>
+
+                    <div class="col-md-4">
+                      <label class="form-label">q</label>
+                      <input class="form-control" name="q" value="<?php echo h($q); ?>" placeholder="Ara: doc_id / doc_no / title / status">
+                    </div>
+
+                    <div class="col-md-2">
+                      <label class="form-label">limit</label>
+                      <select class="form-select" name="limit">
+                        <?php foreach ([50,120,200,300,500] as $l): ?>
+                          <option value="<?php echo (int)$l; ?>" <?php echo ((int)$l===$limit?'selected':''); ?>>
+                            <?php echo (int)$l; ?>
+                          </option>
+                        <?php endforeach; ?>
+                      </select>
+                    </div>
+
+                    <div class="col-md-1 d-flex gap-2 align-items-end">
+                      <button class="btn btn-primary" type="submit">Getir</button>
+                    </div>
+
+                    <div class="col-md-12 d-flex gap-2 flex-wrap">
+                      <a class="btn btn-outline-primary" href="/php-mongo-erp/public/gendoc_list.php">Sıfırla</a>
+                      <button class="btn btn-primary" type="button" id="btnNewDoc">+ Yeni</button>
+                      <span class="text-muted" style="font-size:12px; align-self:center;"><?php echo (int)count($rows); ?> kayıt</span>
+                    </div>
+                  </form>
+
+                  <div class="table-responsive mt-4">
+                    <table id="gendocTable" class="table table-bordered">
+                      <thead>
+                        <tr>
+                          <th style="width:44px;">🔒</th>
+                          <th style="width:220px;">doc_id</th>
+                          <th style="width:180px;">doc_no</th>
+                          <th>title</th>
+                          <th style="width:120px;">status</th>
+                          <th style="width:180px;">updated_at</th>
+                          <th style="width:420px;">links</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        <?php foreach ($rows as $r):
+                          $t  = (array)($r['target'] ?? []);
+                          $h0 = (array)($r['header'] ?? []);
+
+                          $did = (string)($t['doc_id'] ?? '');
+
+                          $docNo = (string)($h0['doc_no'] ?? ($t['doc_no'] ?? ''));
+                          $title = (string)($h0['title'] ?? ($t['doc_title'] ?? ''));
+                          $status= (string)($h0['status'] ?? ($t['status'] ?? ''));
+
+                          $upd = (string)($r['updated_at'] ?? ($r['created_at'] ?? ''));
+                          $snapId = (string)($r['_latest_snapshot_id'] ?? '');
+                        ?>
+                          <tr data-doc-id="<?php echo h($did); ?>">
+                            <td class="lock-cell">🔓</td>
+                            <td><span class="code"><?php echo h($did); ?></span></td>
+                            <td><?php echo h($docNo); ?></td>
+                            <td><?php echo h($title); ?></td>
+                            <td><span class="pill"><?php echo h($status); ?></span></td>
+                            <td class="text-muted" style="font-size:12px;"><?php echo h(fmt_tr($upd)); ?></td>
+                            <td>
+                              <div class="actions">
+                                <a class="btn btn-outline-primary btn-sm" target="_blank"
+                                   href="/php-mongo-erp/public/gendoc_admin.php?module=<?php echo urlencode($module); ?>&doc_type=<?php echo urlencode($docType); ?>&doc_id=<?php echo urlencode($did); ?>">
+                                  Edit
+                                </a>
+
+                                <a class="btn btn-outline-primary btn-sm" target="_blank"
+                                   href="/php-mongo-erp/public/timeline.php?module=<?php echo urlencode($module); ?>&doc_type=<?php echo urlencode($docType); ?>&doc_id=<?php echo urlencode($did); ?>">
+                                  Timeline
+                                </a>
+
+                                <a class="btn btn-outline-primary btn-sm" target="_blank"
+                                   href="/php-mongo-erp/public/audit_view.php?module=<?php echo urlencode($module); ?>&doc_type=<?php echo urlencode($docType); ?>&doc_id=<?php echo urlencode($did); ?>">
+                                  Audit
+                                </a>
+
+                                <?php if ($snapId): ?>
+                                  <a class="btn btn-outline-primary btn-sm" target="_blank"
+                                     href="/php-mongo-erp/public/snapshot_view.php?snapshot_id=<?php echo urlencode($snapId); ?>">
+                                    Snapshot
+                                  </a>
+                                <?php else: ?>
+                                  <span class="btn btn-outline-secondary btn-sm disabled">Snapshot</span>
+                                <?php endif; ?>
+                              </div>
+                            </td>
+                          </tr>
+                        <?php endforeach; ?>
+                      </tbody>
+                    </table>
+                  </div>
+
+                </div>
+              </div>
+            </div>
+
+          </div>
+        </div>
+
+        <div class="content-backdrop fade"></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="layout-overlay layout-menu-toggle"></div>
+  <div class="drag-target"></div>
 </div>
 
-<form method="GET" class="bar">
-  <select name="module">
-    <?php foreach (['gen','i18n','stock','inv'] as $m): ?>
-      <option value="<?php echo h($m); ?>" <?php echo ($m===$module?'selected':''); ?>><?php echo h($m); ?></option>
-    <?php endforeach; ?>
-  </select>
+<?php require_once __DIR__ . '/../app/views/layout/footer.php'; ?>
 
-  <input class="in" name="doc_type" value="<?php echo h($docType); ?>" placeholder="doc_type (örn: GENDOC01T)">
-  <input class="in" name="q" value="<?php echo h($q); ?>" placeholder="Ara: doc_id / doc_no / title / status">
-
-  <select name="limit">
-    <?php foreach ([50,120,200,300,500] as $l): ?>
-      <option value="<?php echo (int)$l; ?>" <?php echo ((int)$l===$limit?'selected':''); ?>>limit <?php echo (int)$l; ?></option>
-    <?php endforeach; ?>
-  </select>
-
-  <button class="btn btn-primary" type="submit">Getir</button>
-  <a class="btn" href="/php-mongo-erp/public/gendoc_list.php">Sıfırla</a>
-</form>
-
-<div class="bar">
-  <button class="btn btn-primary" type="button" id="btnNewDoc">+ Yeni</button>
-  <span class="small"><?php echo (int)count($rows); ?> kayıt</span>
-</div>
-
-<!-- New Doc Modal -->
+<!-- New Doc Modal (Theme'e uygun) -->
 <div id="newDocModal" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,.35); z-index:9999;">
-  <div style="max-width:520px; background:#fff; margin:12vh auto; border-radius:14px; padding:14px; border:1px solid #ddd;">
-    <div style="display:flex; align-items:center; gap:10px;">
-      <div style="font-weight:bold;">Yeni GENDOC</div>
-      <span style="flex:1"></span>
-      <button class="btn" type="button" id="btnNewClose">Kapat</button>
-    </div>
+  <div class="card" style="max-width:560px; margin:12vh auto; border-radius:14px;">
+    <div class="card-body">
+      <div class="d-flex align-items-center gap-2">
+        <div class="fw-bold">Yeni GENDOC</div>
+        <span class="flex-grow-1"></span>
+        <button class="btn btn-outline-primary btn-sm" type="button" id="btnNewClose">Kapat</button>
+      </div>
 
-    <div class="small" style="margin-top:10px;">
-      module / doc_type:
-      <b><?php echo h($module); ?></b> / <b><?php echo h($docType); ?></b>
-    </div>
+      <div class="text-muted mt-3" style="font-size:12px;">
+        module / doc_type: <b><?php echo h($module); ?></b> / <b><?php echo h($docType); ?></b>
+      </div>
 
-    <div style="margin-top:12px;">
-      <div class="small">doc_id</div>
-      <input class="in" id="new_doc_id" placeholder="örn: DEMO-2" style="width:100%;">
-    </div>
+      <div class="mt-3">
+        <label class="form-label">doc_id</label>
+        <input class="form-control" id="new_doc_id" placeholder="örn: DEMO-2">
+      </div>
 
-    <div style="margin-top:12px; display:flex; gap:10px; justify-content:flex-end;">
-      <button class="btn" type="button" id="btnNewCancel">Vazgeç</button>
-      <button class="btn btn-primary" type="button" id="btnNewGo">Oluştur</button>
+      <div class="mt-4 d-flex gap-2 justify-content-end">
+        <button class="btn btn-outline-primary" type="button" id="btnNewCancel">Vazgeç</button>
+        <button class="btn btn-primary" type="button" id="btnNewGo">Oluştur</button>
+      </div>
     </div>
   </div>
 </div>
-
-<table id="gendocTable">
-  <thead>
-    <tr>
-      <th style="width:44px;">🔒</th>
-      <th style="width:220px;">doc_id</th>
-      <th style="width:180px;">doc_no</th>
-      <th>title</th>
-      <th style="width:120px;">status</th>
-      <th style="width:180px;">updated_at</th>
-      <th style="width:420px;">links</th>
-    </tr>
-  </thead>
-  <tbody>
-    <?php foreach ($rows as $r):
-      $t  = (array)($r['target'] ?? []);
-      $h0 = (array)($r['header'] ?? []);
-
-      $did = (string)($t['doc_id'] ?? '');
-
-      // ✅ fallbacklar
-      $docNo = (string)($h0['doc_no'] ?? ($t['doc_no'] ?? ''));
-      $title = (string)($h0['title'] ?? ($t['doc_title'] ?? ''));
-      $status= (string)($h0['status'] ?? ($t['status'] ?? ''));
-
-      $upd = (string)($r['updated_at'] ?? ($r['created_at'] ?? ''));
-      $snapId = (string)($r['_latest_snapshot_id'] ?? '');
-    ?>
-      <tr data-doc-id="<?php echo h($did); ?>">
-        <td class="lock-cell">🔓</td>
-        <td><span class="code"><?php echo h($did); ?></span></td>
-        <td><?php echo h($docNo); ?></td>
-        <td><?php echo h($title); ?></td>
-        <td><span class="pill"><?php echo h($status); ?></span></td>
-        <td class="small"><?php echo h(fmt_tr($upd)); ?></td>
-        <td>
-          <div class="actions">
-            <a class="btn" target="_blank"
-               href="/php-mongo-erp/public/gendoc_admin.php?module=<?php echo urlencode($module); ?>&doc_type=<?php echo urlencode($docType); ?>&doc_id=<?php echo urlencode($did); ?>">
-              Edit
-            </a>
-
-            <a class="btn" target="_blank"
-               href="/php-mongo-erp/public/timeline.php?module=<?php echo urlencode($module); ?>&doc_type=<?php echo urlencode($docType); ?>&doc_id=<?php echo urlencode($did); ?>">
-              Timeline
-            </a>
-
-            <a class="btn" target="_blank"
-               href="/php-mongo-erp/public/audit_view.php?module=<?php echo urlencode($module); ?>&doc_type=<?php echo urlencode($docType); ?>&doc_id=<?php echo urlencode($did); ?>">
-              Audit
-            </a>
-
-            <?php if ($snapId): ?>
-              <a class="btn" target="_blank"
-                 href="/php-mongo-erp/public/snapshot_view.php?snapshot_id=<?php echo urlencode($snapId); ?>">
-                Snapshot
-              </a>
-            <?php else: ?>
-              <span class="btn" style="opacity:.45; cursor:default;">Snapshot</span>
-            <?php endif; ?>
-          </div>
-        </td>
-      </tr>
-    <?php endforeach; ?>
-  </tbody>
-</table>
 
 <script>
 (function(){
@@ -412,7 +462,7 @@ if ($withSnapshot) {
     return dt;
   }
 
-  initDataTable();
+  const dt = initDataTable();
 
   // --- NEW DOC MODAL ---
   const modal = document.getElementById('newDocModal');

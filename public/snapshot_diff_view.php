@@ -1,12 +1,14 @@
 <?php
 /**
- * public/snapshot_diff_view.php (FINAL)
+ * public/snapshot_diff_view.php (FINAL - THEME)
  *
  * - Snapshot diff HTML view
  * - BSONDocument -> array fix
  * - Prev/Next diff navigation (target_key + version)
  * - Lang rows özel detay diff
  * - Genel data için nested diff detaylı render (flatten)
+ *
+ * ✅ Theme Layout: header / left / header2 / footer
  */
 
 require_once __DIR__ . '/../core/bootstrap.php';
@@ -88,9 +90,7 @@ function json_pretty($v): string {
 
 function safe_json($v): string {
   $j = json_encode($v, JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES);
-  if ($j === false) {
-    return '"<json_encode_failed>"';
-  }
+  if ($j === false) return '"<json_encode_failed>"';
   return $j;
 }
 
@@ -175,226 +175,249 @@ if ($isLang) {
   $flat = flatten_diff_assoc($genDiff);
 }
 
+/** ✅ THEME HEAD */
+require_once __DIR__ . '/../app/views/layout/header.php';
 ?>
-<!doctype html>
-<html>
-<head>
-  <meta charset="utf-8">
-  <title>Snapshot Diff</title>
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <style>
-    body{ font-family: Arial, sans-serif; margin:0; background:#0f1220; color:#e8ebf6; }
-    .wrap{ max-width:1200px; margin:0 auto; padding:16px; }
-    .topbar{ display:flex; gap:10px; align-items:center; flex-wrap:wrap; margin-bottom:12px; }
-    .btn{
-      padding:8px 12px; border-radius:10px; border:1px solid rgba(255,255,255,.12);
-      background:transparent; color:#e8ebf6; text-decoration:none; cursor:pointer;
-      display:inline-flex; gap:8px; align-items:center;
-    }
-    .btn:hover{ filter:brightness(1.05); }
-    .btn-dim{ opacity:.55; pointer-events:none; }
-    .h1{ font-size:22px; font-weight:800; margin:0 0 6px; }
-    .muted{ color:rgba(232,235,246,.65); font-size:13px; }
-    .card{
-      background:#171a2c; border:1px solid rgba(255,255,255,.10);
-      border-radius:16px; padding:14px; margin-top:12px;
-    }
-    .grid{ display:grid; grid-template-columns: 1fr 1fr; gap:12px; }
-    @media (max-width: 980px){ .grid{ grid-template-columns: 1fr; } }
-    .code{
-      font-family: ui-monospace, Menlo, Consolas, monospace;
-      background:rgba(0,0,0,.25); border:1px solid rgba(255,255,255,.10);
-      padding:2px 8px; border-radius:999px; font-size:12px;
-    }
-    .kv{ font-size:13px; line-height:1.6; color:rgba(232,235,246,.80); }
-    .kv b{ color:#fff; font-weight:700; }
-    table{ border-collapse:collapse; width:100%; }
-    th,td{ border:1px solid rgba(255,255,255,.12); padding:8px; vertical-align:top; }
-    th{ background:rgba(255,255,255,.06); text-align:left; }
-    .small{ font-size:12px; color:rgba(232,235,246,.70); }
-    details{ margin-top:8px; }
-    pre{ margin:0; white-space:pre-wrap; word-break:break-word; color:#e8ebf6; }
-  </style>
-</head>
 <body>
-<div class="wrap">
+<div class="layout-wrapper layout-content-navbar">
+  <div class="layout-container">
 
-  <div class="topbar">
-    <a class="btn" href="/php-mongo-erp/public/timeline.php">← Timeline</a>
+    <?php require_once __DIR__ . '/../app/views/layout/left.php'; ?>
 
-    <?php if ($prevByVer && !empty($prevByVer['_id'])): ?>
-      <a class="btn" href="/php-mongo-erp/public/snapshot_diff_view.php?snapshot_id=<?php echo esc($prevByVer['_id']); ?>">← Önceki Diff</a>
-    <?php else: ?>
-      <span class="btn btn-dim">← Önceki Diff</span>
-    <?php endif; ?>
+    <div class="layout-page">
+      <?php require_once __DIR__ . '/../app/views/layout/header2.php'; ?>
 
-    <?php if ($nextByVer && !empty($nextByVer['_id'])): ?>
-      <a class="btn" href="/php-mongo-erp/public/snapshot_diff_view.php?snapshot_id=<?php echo esc($nextByVer['_id']); ?>">Sonraki Diff →</a>
-    <?php else: ?>
-      <span class="btn btn-dim">Sonraki Diff →</span>
-    <?php endif; ?>
+      <div class="content-wrapper">
+        <div class="container-xxl flex-grow-1 container-p-y">
 
-    <span style="flex:1"></span>
+          <style>
+            /* sadece bu sayfaya özel “diff görünümü” */
+            .diff-wrap{ max-width:1200px; margin:0 auto; }
+            .diff-topbar{ display:flex; gap:10px; align-items:center; flex-wrap:wrap; margin-bottom:12px; }
+            .diff-btn{
+              padding:8px 12px; border-radius:10px;
+              border:1px solid rgba(0,0,0,.12);
+              background:#fff; color:#111; text-decoration:none;
+              display:inline-flex; gap:8px; align-items:center;
+            }
+            .diff-btn:hover{ filter:brightness(0.98); }
+            .diff-btn-dim{ opacity:.55; pointer-events:none; }
+            .diff-h1{ font-size:20px; font-weight:800; margin:0 0 6px; }
+            .diff-muted{ color:rgba(0,0,0,.55); font-size:12px; }
+            .diff-card{
+              border:1px solid rgba(0,0,0,.10);
+              border-radius:14px; padding:12px;
+              background:#fff;
+              margin-top:12px;
+            }
+            .diff-grid{ display:grid; grid-template-columns: 1fr 1fr; gap:12px; }
+            @media (max-width: 980px){ .diff-grid{ grid-template-columns: 1fr; } }
+            .diff-code{
+              font-family: ui-monospace, Menlo, Consolas, monospace;
+              background:rgba(0,0,0,.05);
+              border:1px solid rgba(0,0,0,.10);
+              padding:2px 8px; border-radius:999px; font-size:12px;
+            }
+            .diff-kv{ font-size:13px; line-height:1.6; color:rgba(0,0,0,.72); }
+            .diff-kv b{ color:#111; font-weight:700; }
+            .diff-table{ border-collapse:collapse; width:100%; }
+            .diff-table th, .diff-table td{ border:1px solid rgba(0,0,0,.12); padding:8px; vertical-align:top; }
+            .diff-table th{ background:rgba(0,0,0,.04); text-align:left; }
+            .diff-small{ font-size:12px; color:rgba(0,0,0,.62); }
+            .diff-pre{ margin:0; white-space:pre-wrap; word-break:break-word; }
+            details{ margin-top:8px; }
+          </style>
 
-    <a class="btn" target="_blank" href="/php-mongo-erp/public/snapshot_view.php?snapshot_id=<?php echo esc($snapshotId); ?>">Snapshot</a>
-    <?php if ($prevId): ?>
-      <a class="btn" target="_blank" href="/php-mongo-erp/public/snapshot_view.php?snapshot_id=<?php echo esc($prevId); ?>">Prev Snapshot</a>
-    <?php endif; ?>
-  </div>
+          <div class="diff-wrap">
 
-  <div class="h1">
-    Diff (v<?php echo (int)($prevSnap['version'] ?? 0); ?> → v<?php echo (int)$ver; ?>)
-    <span class="code"><?php echo esc($targetKey); ?></span>
-  </div>
+            <div class="diff-topbar">
+              <a class="diff-btn" href="/php-mongo-erp/public/timeline.php">← Timeline</a>
 
-  <div class="muted">
-    Current: <span class="code"><?php echo esc($snapshotId); ?></span>
-    <?php if ($prevId): ?>
-      &nbsp;|&nbsp; Prev: <span class="code"><?php echo esc($prevId); ?></span>
-    <?php else: ?>
-      &nbsp;|&nbsp; Prev: -
-    <?php endif; ?>
-  </div>
+              <?php if ($prevByVer && !empty($prevByVer['_id'])): ?>
+                <a class="diff-btn" href="/php-mongo-erp/public/snapshot_diff_view.php?snapshot_id=<?php echo esc($prevByVer['_id']); ?>">← Önceki Diff</a>
+              <?php else: ?>
+                <span class="diff-btn diff-btn-dim">← Önceki Diff</span>
+              <?php endif; ?>
 
-  <div class="grid">
-    <div class="card">
-      <div class="kv">
-        <div><b>Current version</b>: v<?php echo (int)$ver; ?></div>
-        <div><b>Created</b>: <?php echo esc(fmt_tr($snap['created_at'] ?? '')); ?></div>
-        <div><b>User</b>: <?php echo esc($snap['context']['username'] ?? '-'); ?></div>
-        <div><b>Hash</b>: <span class="code"><?php echo esc($snap['hash'] ?? '-'); ?></span></div>
+              <?php if ($nextByVer && !empty($nextByVer['_id'])): ?>
+                <a class="diff-btn" href="/php-mongo-erp/public/snapshot_diff_view.php?snapshot_id=<?php echo esc($nextByVer['_id']); ?>">Sonraki Diff →</a>
+              <?php else: ?>
+                <span class="diff-btn diff-btn-dim">Sonraki Diff →</span>
+              <?php endif; ?>
+
+              <span style="flex:1"></span>
+
+              <a class="diff-btn" target="_blank" href="/php-mongo-erp/public/snapshot_view.php?snapshot_id=<?php echo esc($snapshotId); ?>">Snapshot</a>
+              <?php if ($prevId): ?>
+                <a class="diff-btn" target="_blank" href="/php-mongo-erp/public/snapshot_view.php?snapshot_id=<?php echo esc($prevId); ?>">Prev Snapshot</a>
+              <?php endif; ?>
+            </div>
+
+            <div class="diff-h1">
+              Diff (v<?php echo (int)($prevSnap['version'] ?? 0); ?> → v<?php echo (int)$ver; ?>)
+              <span class="diff-code"><?php echo esc($targetKey); ?></span>
+            </div>
+
+            <div class="diff-muted">
+              Current: <span class="diff-code"><?php echo esc($snapshotId); ?></span>
+              <?php if ($prevId): ?>
+                &nbsp;|&nbsp; Prev: <span class="diff-code"><?php echo esc($prevId); ?></span>
+              <?php else: ?>
+                &nbsp;|&nbsp; Prev: -
+              <?php endif; ?>
+            </div>
+
+            <div class="diff-grid">
+              <div class="diff-card">
+                <div class="diff-kv">
+                  <div><b>Current version</b>: v<?php echo (int)$ver; ?></div>
+                  <div><b>Created</b>: <?php echo esc(fmt_tr($snap['created_at'] ?? '')); ?></div>
+                  <div><b>User</b>: <?php echo esc($snap['context']['username'] ?? '-'); ?></div>
+                  <div><b>Hash</b>: <span class="diff-code"><?php echo esc($snap['hash'] ?? '-'); ?></span></div>
+                </div>
+              </div>
+
+              <div class="diff-card">
+                <div class="diff-kv">
+                  <div><b>Prev version</b>: v<?php echo (int)($prevSnap['version'] ?? 0); ?></div>
+                  <div><b>Created</b>: <?php echo esc(fmt_tr($prevSnap['created_at'] ?? '')); ?></div>
+                  <div><b>User</b>: <?php echo esc($prevSnap['context']['username'] ?? '-'); ?></div>
+                  <div><b>Hash</b>: <span class="diff-code"><?php echo esc($prevSnap['hash'] ?? '-'); ?></span></div>
+                </div>
+              </div>
+            </div>
+
+            <div class="diff-card">
+              <h5 style="margin:0 0 10px;">Değişiklikler</h5>
+
+              <?php if (!$prevSnap): ?>
+                <div class="diff-small">Bu snapshot’ın prev’i yok. (ilk versiyon olabilir)</div>
+
+              <?php elseif ($isLang): ?>
+                <?php
+                  $changed = $langDiff['changed_keys'] ?? [];
+                  $added = $langDiff['added_keys'] ?? [];
+                  $removed = $langDiff['removed_keys'] ?? [];
+                ?>
+
+                <div class="diff-small" style="margin-bottom:8px;">
+                  Added: <b><?php echo (int)count($added); ?></b>,
+                  Removed: <b><?php echo (int)count($removed); ?></b>,
+                  Changed: <b><?php echo (int)count($changed); ?></b>
+                </div>
+
+                <?php if (empty($added) && empty($removed) && empty($changed)): ?>
+                  <div class="diff-small">Değişiklik yok.</div>
+                <?php else: ?>
+
+                  <?php if (!empty($changed)): ?>
+                    <h6 style="margin:10px 0 8px;">Changed Keys</h6>
+                    <table class="diff-table">
+                      <tr>
+                        <th style="width:320px;">Key</th>
+                        <th>TR</th>
+                        <th>EN</th>
+                      </tr>
+                      <?php foreach ($changed as $k => $lcDiff): ?>
+                        <tr>
+                          <td><span class="diff-code"><?php echo esc($k); ?></span></td>
+                          <td class="diff-small">
+                            <?php if (!empty($lcDiff['tr'])): ?>
+                              <div><b>from</b>: <?php echo esc($lcDiff['tr']['from'] ?? ''); ?></div>
+                              <div><b>to</b>: <?php echo esc($lcDiff['tr']['to'] ?? ''); ?></div>
+                            <?php else: ?>-<?php endif; ?>
+                          </td>
+                          <td class="diff-small">
+                            <?php if (!empty($lcDiff['en'])): ?>
+                              <div><b>from</b>: <?php echo esc($lcDiff['en']['from'] ?? ''); ?></div>
+                              <div><b>to</b>: <?php echo esc($lcDiff['en']['to'] ?? ''); ?></div>
+                            <?php else: ?>-<?php endif; ?>
+                          </td>
+                        </tr>
+                      <?php endforeach; ?>
+                    </table>
+                  <?php endif; ?>
+
+                  <?php if (!empty($added)): ?>
+                    <h6 style="margin:14px 0 8px;">Added Keys</h6>
+                    <pre class="diff-pre diff-small"><?php echo esc(json_encode($added, JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES|JSON_PRETTY_PRINT)); ?></pre>
+                  <?php endif; ?>
+
+                  <?php if (!empty($removed)): ?>
+                    <h6 style="margin:14px 0 8px;">Removed Keys</h6>
+                    <pre class="diff-pre diff-small"><?php echo esc(json_encode($removed, JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES|JSON_PRETTY_PRINT)); ?></pre>
+                  <?php endif; ?>
+
+                <?php endif; ?>
+
+              <?php else: ?>
+                <?php
+                  $leafAdded = 0; $leafRemoved = 0; $leafChanged = 0;
+                  foreach ($flat as $it) {
+                    if (($it['type'] ?? '') === 'added') $leafAdded++;
+                    elseif (($it['type'] ?? '') === 'removed') $leafRemoved++;
+                    else $leafChanged++;
+                  }
+                ?>
+
+                <div class="diff-small" style="margin-bottom:8px;">
+                  Added: <b><?php echo (int)$leafAdded; ?></b>,
+                  Removed: <b><?php echo (int)$leafRemoved; ?></b>,
+                  Changed: <b><?php echo (int)$leafChanged; ?></b>
+                </div>
+
+                <?php if (empty($flat)): ?>
+                  <div class="diff-small">Değişiklik yok.</div>
+                <?php else: ?>
+                  <h6 style="margin:10px 0 8px;">Detaylı Değişiklikler</h6>
+                  <table class="diff-table">
+                    <tr>
+                      <th style="width:420px;">Path</th>
+                      <th style="width:90px;">Type</th>
+                      <th>From</th>
+                      <th>To</th>
+                    </tr>
+                    <?php foreach ($flat as $it): ?>
+                      <tr>
+                        <td><span class="diff-code"><?php echo esc($it['path']); ?></span></td>
+                        <td class="diff-small"><?php echo esc($it['type']); ?></td>
+                        <td class="diff-small"><?php echo esc(safe_json($it['from'])); ?></td>
+                        <td class="diff-small"><?php echo esc(safe_json($it['to'])); ?></td>
+                      </tr>
+                    <?php endforeach; ?>
+                  </table>
+                <?php endif; ?>
+              <?php endif; ?>
+            </div>
+
+            <div class="diff-card">
+              <h5 style="margin:0 0 8px;">Detay JSON (opsiyonel)</h5>
+
+              <details>
+                <summary class="diff-small">Prev Snapshot Data</summary>
+                <pre class="diff-pre diff-small"><?php echo esc(json_pretty($oldData)); ?></pre>
+              </details>
+
+              <details>
+                <summary class="diff-small">Current Snapshot Data</summary>
+                <pre class="diff-pre diff-small"><?php echo esc(json_pretty($newData)); ?></pre>
+              </details>
+            </div>
+
+          </div>
+
+        </div>
+
+        <div class="content-backdrop fade"></div>
       </div>
     </div>
-
-    <div class="card">
-      <div class="kv">
-        <div><b>Prev version</b>: v<?php echo (int)($prevSnap['version'] ?? 0); ?></div>
-        <div><b>Created</b>: <?php echo esc(fmt_tr($prevSnap['created_at'] ?? '')); ?></div>
-        <div><b>User</b>: <?php echo esc($prevSnap['context']['username'] ?? '-'); ?></div>
-        <div><b>Hash</b>: <span class="code"><?php echo esc($prevSnap['hash'] ?? '-'); ?></span></div>
-      </div>
-    </div>
   </div>
 
-  <div class="card">
-    <h3 style="margin:0 0 10px;">Değişiklikler</h3>
-
-    <?php if (!$prevSnap): ?>
-      <div class="small">Bu snapshot’ın prev’i yok. (ilk versiyon olabilir)</div>
-
-    <?php elseif ($isLang): ?>
-      <?php
-        $changed = $langDiff['changed_keys'] ?? [];
-        $added = $langDiff['added_keys'] ?? [];
-        $removed = $langDiff['removed_keys'] ?? [];
-      ?>
-
-      <div class="small" style="margin-bottom:8px;">
-        Added: <b><?php echo (int)count($added); ?></b>,
-        Removed: <b><?php echo (int)count($removed); ?></b>,
-        Changed: <b><?php echo (int)count($changed); ?></b>
-      </div>
-
-      <?php if (empty($added) && empty($removed) && empty($changed)): ?>
-        <div class="small">Değişiklik yok.</div>
-      <?php else: ?>
-
-        <?php if (!empty($changed)): ?>
-          <h4 style="margin:10px 0 8px;">Changed Keys</h4>
-          <table>
-            <tr>
-              <th style="width:320px;">Key</th>
-              <th>TR</th>
-              <th>EN</th>
-            </tr>
-            <?php foreach ($changed as $k => $lcDiff): ?>
-              <tr>
-                <td><span class="code"><?php echo esc($k); ?></span></td>
-                <td class="small">
-                  <?php if (!empty($lcDiff['tr'])): ?>
-                    <div><b>from</b>: <?php echo esc($lcDiff['tr']['from'] ?? ''); ?></div>
-                    <div><b>to</b>: <?php echo esc($lcDiff['tr']['to'] ?? ''); ?></div>
-                  <?php else: ?>-<?php endif; ?>
-                </td>
-                <td class="small">
-                  <?php if (!empty($lcDiff['en'])): ?>
-                    <div><b>from</b>: <?php echo esc($lcDiff['en']['from'] ?? ''); ?></div>
-                    <div><b>to</b>: <?php echo esc($lcDiff['en']['to'] ?? ''); ?></div>
-                  <?php else: ?>-<?php endif; ?>
-                </td>
-              </tr>
-            <?php endforeach; ?>
-          </table>
-        <?php endif; ?>
-
-        <?php if (!empty($added)): ?>
-          <h4 style="margin:14px 0 8px;">Added Keys</h4>
-          <pre class="small"><?php echo esc(json_encode($added, JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES|JSON_PRETTY_PRINT)); ?></pre>
-        <?php endif; ?>
-
-        <?php if (!empty($removed)): ?>
-          <h4 style="margin:14px 0 8px;">Removed Keys</h4>
-          <pre class="small"><?php echo esc(json_encode($removed, JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES|JSON_PRETTY_PRINT)); ?></pre>
-        <?php endif; ?>
-
-      <?php endif; ?>
-
-    <?php else: ?>
-      <?php
-        $leafAdded = 0; $leafRemoved = 0; $leafChanged = 0;
-        foreach ($flat as $it) {
-          if (($it['type'] ?? '') === 'added') $leafAdded++;
-          elseif (($it['type'] ?? '') === 'removed') $leafRemoved++;
-          else $leafChanged++;
-        }
-      ?>
-
-      <div class="small" style="margin-bottom:8px;">
-        Added: <b><?php echo (int)$leafAdded; ?></b>,
-        Removed: <b><?php echo (int)$leafRemoved; ?></b>,
-        Changed: <b><?php echo (int)$leafChanged; ?></b>
-      </div>
-
-      <?php if (empty($flat)): ?>
-        <div class="small">Değişiklik yok.</div>
-      <?php else: ?>
-
-        <h4 style="margin:10px 0 8px;">Detaylı Değişiklikler</h4>
-        <table>
-          <tr>
-            <th style="width:420px;">Path</th>
-            <th style="width:90px;">Type</th>
-            <th>From</th>
-            <th>To</th>
-          </tr>
-          <?php foreach ($flat as $it): ?>
-            <tr>
-              <td><span class="code"><?php echo esc($it['path']); ?></span></td>
-              <td class="small"><?php echo esc($it['type']); ?></td>
-              <td class="small"><?php echo esc(safe_json($it['from'])); ?></td>
-              <td class="small"><?php echo esc(safe_json($it['to'])); ?></td>
-            </tr>
-          <?php endforeach; ?>
-        </table>
-
-      <?php endif; ?>
-    <?php endif; ?>
-  </div>
-
-  <div class="card">
-    <h3 style="margin:0 0 8px;">Detay JSON (opsiyonel)</h3>
-
-    <details>
-      <summary class="small">Prev Snapshot Data</summary>
-      <pre class="small"><?php echo esc(json_pretty($oldData)); ?></pre>
-    </details>
-
-    <details>
-      <summary class="small">Current Snapshot Data</summary>
-      <pre class="small"><?php echo esc(json_pretty($newData)); ?></pre>
-    </details>
-  </div>
-
+  <div class="layout-overlay layout-menu-toggle"></div>
+  <div class="drag-target"></div>
 </div>
+
+<?php require_once __DIR__ . '/../app/views/layout/footer.php'; ?>
+
 </body>
 </html>

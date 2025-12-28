@@ -1,8 +1,8 @@
 <?php
 /**
- * core/i18n/LanguageManager.php (FINAL)
+ * core/i18n/LanguageManager.php (FINAL - FIX)
  *
- * - boot(): aktif dilleri yükler
+ * - boot(): aktif dilleri yükler (BSONDocument stabil)
  * - get(): current lang
  * - set(): session'a yazar
  * - getActiveLangs(): LANG01E aktif listesi (meta ile)
@@ -18,16 +18,56 @@ final class LanguageManager
 {
   private static bool $booted = false;
   private static string $current = 'tr';
-  private static array $activeMeta = []; // list of LANG01E docs
+  private static array $activeMeta = []; // list of LANG01E docs (array normalized)
   private static array $dictCache = [];  // ['tr' => ['key'=>'text', ...], ...]
+
+  /** BSONDocument/BSONArray -> array normalize (recursive) */
+  private static function normalize($v) {
+    if ($v instanceof MongoDB\Model\BSONDocument || $v instanceof MongoDB\Model\BSONArray) {
+      $v = $v->getArrayCopy();
+    }
+    if (is_array($v)) {
+      $out = [];
+      foreach ($v as $k => $vv) $out[$k] = self::normalize($vv);
+      return $out;
+    }
+    return $v;
+  }
+
+  /** activeMeta'dan aktif dil kodlarını güvenli çıkar */
+  private static function extractActiveCodes(array $meta): array {
+    $codes = [];
+    foreach ($meta as $d) {
+      $d = self::normalize($d);
+      if (!is_array($d)) continue;
+      $lc = strtolower(trim((string)($d['lang_code'] ?? '')));
+      if ($lc !== '') $codes[] = $lc;
+    }
+    $codes = array_values(array_unique($codes));
+    return $codes;
+  }
 
   public static function boot(): void
   {
     if (self::$booted) return;
 
+    $default = 'tr';
+
     try {
-      self::$activeMeta = LANG01ERepository::listActive();
-      $default = LANG01ERepository::getDefaultLang();
+      $raw = LANG01ERepository::listActive();
+      $raw = self::normalize($raw);
+      self::$activeMeta = is_array($raw) ? $raw : [];
+
+      $def = LANG01ERepository::getDefaultLang();
+      $def = self::normalize($def);
+
+      // getDefaultLang bazen doc/array döndürür -> normalize et
+      if (is_string($def)) {
+        $default = strtolower(trim($def)) ?: 'tr';
+      } elseif (is_array($def)) {
+        $tmp = strtolower(trim((string)($def['lang_code'] ?? '')));
+        if ($tmp !== '') $default = $tmp;
+      }
     } catch (Throwable $e) {
       self::$activeMeta = [
         ['lang_code'=>'tr','name'=>'Türkçe','direction'=>'ltr','is_default'=>true,'is_active'=>true],
@@ -36,21 +76,25 @@ final class LanguageManager
       $default = 'tr';
     }
 
+    // aktif diller boş geldiyse fallback (en kritik kısım)
+    $activeCodes = self::extractActiveCodes(self::$activeMeta);
+    if (empty($activeCodes)) {
+      self::$activeMeta = [
+        ['lang_code'=>'tr','name'=>'Türkçe','direction'=>'ltr','is_default'=>true,'is_active'=>true],
+        ['lang_code'=>'en','name'=>'English','direction'=>'ltr','is_default'=>false,'is_active'=>true],
+      ];
+      $activeCodes = ['tr','en'];
+      $default = 'tr';
+    }
+
     $sessLang = '';
     try { $sessLang = (string)($_SESSION['lang'] ?? ''); } catch (Throwable $e) { $sessLang=''; }
     $sessLang = strtolower(trim($sessLang));
 
-    $activeCodes = [];
-    foreach (self::$activeMeta as $d) {
-      $lc = strtolower(trim((string)($d['lang_code'] ?? '')));
-      if ($lc !== '') $activeCodes[] = $lc;
-    }
-    $activeCodes = array_values(array_unique($activeCodes));
-
     if ($sessLang !== '' && in_array($sessLang, $activeCodes, true)) {
       self::$current = $sessLang;
     } else {
-      self::$current = $default ?: 'tr';
+      self::$current = in_array($default, $activeCodes, true) ? $default : ($activeCodes[0] ?? 'tr');
       $_SESSION['lang'] = self::$current;
     }
 
@@ -70,19 +114,18 @@ final class LanguageManager
     $lc = strtolower(trim($lang));
     if ($lc === '') return;
 
-    // sadece aktif dillere izin ver
-    $activeCodes = array_map(fn($x)=>strtolower(trim((string)($x['lang_code'] ?? ''))), self::$activeMeta);
-    $activeCodes = array_values(array_filter($activeCodes));
+    $activeCodes = self::extractActiveCodes(self::$activeMeta);
+    if (empty($activeCodes)) return;
 
     if (!in_array($lc, $activeCodes, true)) return;
 
     self::$current = $lc;
     $_SESSION['lang'] = $lc;
+
+    // (opsiyonel ama faydalı) dict cache'i temizle
+    // self::$dictCache = [];
   }
 
-  /**
-   * Aktif diller meta listesi döner (header2.php için ideal)
-   */
   public static function getActiveLangs(): array
   {
     if (!self::$booted) self::boot();
@@ -98,15 +141,15 @@ final class LanguageManager
       return self::$dictCache[$lc];
     }
 
-    // LANG01TRepository::dumpAll($lc) zaten key=>['text'=>..] gibi dönüyordu sende
     $dict = [];
     try {
       $rows = LANG01TRepository::dumpAll($lc);
-      foreach ($rows as $k => $r) {
-        if (is_array($r)) {
-          $dict[(string)$k] = (string)($r['text'] ?? '');
-        } else {
-          $dict[(string)$k] = (string)$r;
+      $rows = self::normalize($rows);
+
+      if (is_array($rows)) {
+        foreach ($rows as $k => $r) {
+          if (is_array($r)) $dict[(string)$k] = (string)($r['text'] ?? '');
+          else $dict[(string)$k] = (string)$r;
         }
       }
     } catch (Throwable $e) {
@@ -117,9 +160,6 @@ final class LanguageManager
     return $dict;
   }
 
-  /**
-   * translate
-   */
   public static function t(string $key, array $params = []): string
   {
     if (!self::$booted) self::boot();
@@ -131,12 +171,19 @@ final class LanguageManager
     $dict = self::loadDict($lc);
     $txt = $dict[$k] ?? '';
 
-    // fallback: default lang'a bak
     if ($txt === '') {
+      $def = 'tr';
       try {
-        $def = LANG01ERepository::getDefaultLang();
+        $d = LANG01ERepository::getDefaultLang();
+        $d = self::normalize($d);
+        if (is_string($d)) $def = strtolower(trim($d)) ?: 'tr';
+        elseif (is_array($d)) {
+          $tmp = strtolower(trim((string)($d['lang_code'] ?? '')));
+          if ($tmp !== '') $def = $tmp;
+        }
       } catch (Throwable $e) { $def = 'tr'; }
-      if ($def && $def !== $lc) {
+
+      if ($def !== $lc) {
         $d2 = self::loadDict($def);
         $txt = $d2[$k] ?? '';
       }
@@ -144,7 +191,6 @@ final class LanguageManager
 
     if ($txt === '') $txt = $k;
 
-    // params replace: {name}
     if (!empty($params)) {
       foreach ($params as $pk => $pv) {
         $txt = str_replace('{' . $pk . '}', (string)$pv, $txt);

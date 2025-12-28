@@ -5,7 +5,7 @@
  * - Header: doc_no, title, status
  * - Body: json textarea
  * - ✅ Versiyon seçme: ?v= (dropdown)
- * - Kaydet: HEADER update/insert (duplicate key E11000 fix) + BODY new version + snapshot + event + log
+ * - Kaydet: HEADER update/insert + BODY new version + snapshot + event + log
  *
  * ✅ LOCK VAR (LOCK01E)
  * ✅ AMA Body dahil hiçbir alan KİLİTLENMEZ / disable edilmez (sadece bilgi amaçlı gösterim)
@@ -47,7 +47,9 @@ if (function_exists('require_perm') && !$isAdmin) {
   require_perm('gendoc.manage');
 }
 
-function h($s): string { return htmlspecialchars((string)$s, ENT_QUOTES, 'UTF-8'); }
+if (!function_exists('h')) {
+  function h($s): string { return htmlspecialchars((string)$s, ENT_QUOTES, 'UTF-8'); }
+}
 
 function bson_to_array($v) {
   if ($v instanceof MongoDB\Model\BSONDocument || $v instanceof MongoDB\Model\BSONArray) {
@@ -156,7 +158,6 @@ $loadedVersion = 0;      // currently loaded
 $bodyLatest = null;
 
 if ($targetKey) {
-  // versions list
   try {
     $curV = MongoManager::collection('GENDOC01T')->find(
       ['target_key' => $targetKey],
@@ -176,7 +177,6 @@ if ($targetKey) {
     $latestVersion = 0;
   }
 
-  // which version to load?
   $wantV = $selectedV > 0 ? $selectedV : $latestVersion;
 
   try {
@@ -194,7 +194,6 @@ if ($targetKey) {
       $b = bson_to_array($bodyDoc['body'] ?? null);
       $bodyLatest = is_array($b) ? $b : null;
     } else {
-      // fallback: latest
       $bodyDoc = MongoManager::collection('GENDOC01T')->findOne(
         ['target_key' => $targetKey],
         ['sort'=>['version'=>-1], 'projection'=>['body'=>1,'version'=>1]]
@@ -230,11 +229,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     try {
       $now = new MongoDB\BSON\UTCDateTime((int)(microtime(true) * 1000));
 
-      // target_key garanti
       $targetKey = GENDOC01ERepository::buildTargetKey($target, $ctx);
       if ($targetKey === '') throw new RuntimeException('target_key missing');
 
-      // HEADER update/insert (E11000 fix)
       $existing = MongoManager::collection('GENDOC01E')->findOne(['target_key' => $targetKey], ['projection'=>['_id'=>1]]);
       $existingArr = $existing ? bson_to_array($existing) : null;
 
@@ -286,10 +283,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         MongoManager::collection('GENDOC01E')->insertOne($insert);
       }
 
-      // Atomic version (her zaman yeni version)
       $newVersion = GENDOC01ERepository::nextVersion($targetKey, $ctx);
 
-      // BODY insert
       GENDOC01TRepository::insertVersion(
         $targetKey,
         $newVersion,
@@ -303,14 +298,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         ]
       );
 
-      // SAVE log
       $saveLogId = ActionLogger::success('GENDOC.ADMIN.SAVE', [
         'source' => 'public/gendoc_admin.php',
         'target_key' => $targetKey,
         'version' => $newVersion,
       ], $ctx);
 
-      // SNAPSHOT
       $snap = SnapshotWriter::capture(
         [
           'module'    => $module,
@@ -331,7 +324,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         ]
       );
 
-      // EVENT
       EventWriter::emit(
         'GENDOC.ADMIN.SAVE',
         [
@@ -360,7 +352,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         ]
       );
 
-      // PRG -> save sonrası latest'e düş (v paramını kaldırıyoruz)
       $redir = '/php-mongo-erp/public/gendoc_admin.php?module=' . rawurlencode($module)
              . '&doc_type=' . rawurlencode($docType)
              . '&doc_id=' . rawurlencode($docId)
@@ -375,147 +366,185 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 }
 
 $toast = trim($_GET['toast'] ?? '');
+
+// ✅ Theme header include (HTML head + core css/js)
+require_once __DIR__ . '/../app/views/layout/header.php';
 ?>
-<!doctype html>
-<html>
-<head>
-  <meta charset="utf-8">
-  <title>GENDOC Admin</title>
-  <style>
-    body{ font-family: Arial, sans-serif; }
-    .bar{ display:flex; gap:10px; align-items:center; flex-wrap:wrap; margin:10px 0; }
-    .btn{ padding:6px 10px; border:1px solid #ccc; background:#fff; cursor:pointer; border-radius:6px; text-decoration:none; color:#000; }
-    .btn-primary{ border-color:#1e88e5; background:#1e88e5; color:#fff; }
-    .small{ font-size:12px; color:#666; }
-    input[type="text"], select, textarea{
-      width:100%; box-sizing:border-box;
-      border:1px solid #ddd; border-radius:8px;
-      padding:8px 10px;
-      background:#fff; color:#111;
-    }
-    textarea{ min-height: 280px; font-family: ui-monospace, Menlo, Consolas, monospace; font-size:12px; }
-    .grid{ display:grid; grid-template-columns: 1fr 2fr; gap:14px; }
-    @media (max-width: 980px){ .grid{ grid-template-columns:1fr; } }
-    .card{ border:1px solid #eee; border-radius:12px; padding:12px; }
-    .code{ font-family: ui-monospace, Menlo, Consolas, monospace; }
-    .lockbar{
-      display:flex; gap:10px; align-items:center; flex-wrap:wrap;
-      padding:8px 10px; border:1px solid #eee; border-radius:8px; background:#fafafa;
-      margin:10px 0;
-    }
-    .badge{
-      display:inline-block; padding:3px 8px; border-radius:999px; font-size:12px;
-      background:#E3F2FD; color:#1565C0; font-weight:600;
-    }
-  </style>
-</head>
+
 <body>
+<div class="layout-wrapper layout-content-navbar">
+  <div class="layout-container">
 
-<?php require_once __DIR__ . '/../app/views/layout/header.php'; ?>
+    <?php require_once __DIR__ . '/../app/views/layout/left.php'; ?>
 
-<h3>GENDOC Admin</h3>
-<div class="small">
-  Target:
-  <span class="code"><?php echo h($module); ?></span> /
-  <span class="code"><?php echo h($docType); ?></span> /
-  <span class="code"><?php echo h($docId); ?></span>
-  <?php if ($targetKey): ?>
-    &nbsp;|&nbsp; target_key: <span class="code"><?php echo h($targetKey); ?></span>
-  <?php endif; ?>
-  <?php if ($loadedVersion > 0): ?>
-    &nbsp;|&nbsp; loaded: <span class="code">V<?php echo (int)$loadedVersion; ?></span>
-  <?php endif; ?>
-</div>
+    <div class="layout-page">
+      <?php require_once __DIR__ . '/../app/views/layout/header2.php'; ?>
 
-<div class="lockbar">
-  <span class="badge">LOCK: editing</span>
-  <span class="small" id="lockStatusText">Lock kontrol ediliyor…</span>
-  <span class="small" id="saveStatusText"></span>
-  <span class="small" style="color:#999;">(Not: Lock bilgi amaçlı; alanlar kilitlenmez.)</span>
-</div>
+      <div class="content-wrapper">
+        <div class="container-xxl flex-grow-1 container-p-y">
 
-<?php if ($toast === 'save'): ?>
-  <p style="color:green;">✅ Kaydedildi.</p>
-<?php endif; ?>
+          <div class="row g-6">
 
-<?php if ($err): ?><p style="color:red;"><?php echo h($err); ?></p><?php endif; ?>
+            <div class="col-md-12">
+              <div class="card card-border-shadow-primary">
+                <div class="card-body">
 
-<form method="POST">
-  <div class="grid">
-    <div class="card">
-      <div class="small"><b>Header</b></div>
+                  <div class="d-flex align-items-center justify-content-between flex-wrap gap-2">
+                    <div>
+                      <h4 class="mb-1">GENDOC Admin</h4>
+                      <div class="small text-muted">
+                        Target:
+                        <span class="text-muted"><?php echo h($module); ?></span> /
+                        <span class="text-muted"><?php echo h($docType); ?></span> /
+                        <span class="text-muted"><?php echo h($docId); ?></span>
+                        <?php if ($targetKey): ?>
+                          &nbsp;|&nbsp; target_key: <span class="text-muted"><?php echo h($targetKey); ?></span>
+                        <?php endif; ?>
+                        <?php if ($loadedVersion > 0): ?>
+                          &nbsp;|&nbsp; loaded: <span class="text-muted">V<?php echo (int)$loadedVersion; ?></span>
+                        <?php endif; ?>
+                      </div>
+                    </div>
+                  </div>
 
-      <div class="bar">
-        <div style="flex:1">
-          <div class="small">doc_no</div>
-          <input type="text" name="doc_no" value="<?php echo h($docNo); ?>" placeholder="DOC-001">
+                  <!-- LOCK BAR -->
+                  <div class="alert alert-outline-primary d-flex align-items-center flex-wrap row-gap-2 mt-4" role="alert">
+                    <span class="alert-icon rounded">
+                      <i class="icon-base ri ri-information-line icon-md"></i>
+                    </span>
+                    <span class="ms-2"><b>LOCK:</b> editing</span>
+                    <span class="statusline ms-2" id="lockStatusText">Lock kontrol ediliyor…</span>
+                    <span class="statusline ms-2" id="saveStatusText"></span>
+                    <span class="statusline ms-2 text-muted">(Not: Lock bilgi amaçlı; alanlar kilitlenmez.)</span>
+                  </div>
+
+                  <?php if ($toast === 'save'): ?>
+                    <div class="alert alert-outline-success d-flex align-items-center flex-wrap row-gap-2" role="alert">
+                      <span class="alert-icon rounded">
+                        <i class="icon-base ri ri-check-line icon-md"></i>
+                      </span>
+                      <span class="ms-2">✅ Kaydedildi.</span>
+                    </div>
+                  <?php endif; ?>
+
+                  <?php if ($err): ?>
+                    <div class="alert alert-outline-danger d-flex align-items-center flex-wrap row-gap-2" role="alert">
+                      <span class="alert-icon rounded">
+                        <i class="icon-base ri ri-alert-line icon-md"></i>
+                      </span>
+                      <span class="ms-2"><?php echo h($err); ?></span>
+                    </div>
+                  <?php endif; ?>
+
+                  <form method="POST" class="mt-4">
+                    <div class="row g-4">
+
+                      <div class="col-lg-4">
+                        <div class="card">
+                          <div class="card-body">
+
+                            <h6 class="mb-3">Header</h6>
+
+                            <div class="mb-3">
+                              <label class="form-label">doc_no</label>
+                              <input type="text" class="form-control" name="doc_no" value="<?php echo h($docNo); ?>" placeholder="DOC-001">
+                            </div>
+
+                            <div class="mb-3">
+                              <label class="form-label">title</label>
+                              <input type="text" class="form-control" name="title" value="<?php echo h($title); ?>" placeholder="Başlık">
+                            </div>
+
+                            <div class="mb-3">
+                              <label class="form-label">status</label>
+                              <select class="form-select" name="status">
+                                <?php foreach (['draft','saved','approving','approved','cancelled'] as $st): ?>
+                                  <option value="<?php echo h($st); ?>" <?php echo ($st===$status?'selected':''); ?>>
+                                    <?php echo h($st); ?>
+                                  </option>
+                                <?php endforeach; ?>
+                              </select>
+                              <div class="text-muted mt-1" style="font-size:12px;">
+                                Not: cancelled seçsen bile sonra başka statüyle kaydedebilirsin.
+                              </div>
+                            </div>
+
+                            <!-- ✅ Version select -->
+                            <div class="mb-3">
+                              <label class="form-label">Version (yüklemek için)</label>
+                              <select class="form-select" id="verSelect">
+                                <?php if (empty($versions)): ?>
+                                  <option value="0" selected>latest</option>
+                                <?php else: ?>
+                                  <option value="0" <?php echo ($selectedV<=0?'selected':''); ?>>
+                                    latest (V<?php echo (int)$latestVersion; ?>)
+                                  </option>
+                                  <?php foreach ($versions as $v): ?>
+                                    <option value="<?php echo (int)$v; ?>" <?php echo ((int)$selectedV===(int)$v ? 'selected' : ''); ?>>
+                                      V<?php echo (int)$v; ?>
+                                    </option>
+                                  <?php endforeach; ?>
+                                <?php endif; ?>
+                              </select>
+                              <div class="text-muted mt-1" style="font-size:12px;">
+                                Seçince sayfa reload olur, body o versiyondan açılır.
+                              </div>
+                            </div>
+
+                            <div class="d-flex gap-2 flex-wrap">
+                              <button class="btn btn-primary" type="submit">Kaydet</button>
+
+                              <a class="btn btn-outline-primary" target="_blank"
+                                 href="/php-mongo-erp/public/audit_view.php?module=<?php echo urlencode($module); ?>&doc_type=<?php echo urlencode($docType); ?>&doc_id=<?php echo urlencode($docId); ?>">
+                                Audit View
+                              </a>
+
+                              <a class="btn btn-outline-primary" target="_blank"
+                                 href="/php-mongo-erp/public/timeline.php?module=<?php echo urlencode($module); ?>&doc_type=<?php echo urlencode($docType); ?>&doc_id=<?php echo urlencode($docId); ?>">
+                                Timeline
+                              </a>
+                            </div>
+
+                            <div class="text-muted mt-3" style="font-size:12px;">
+                              Not: Kaydet her zaman yeni version üretir (V+1). Seçili versiyonu ezmez.
+                            </div>
+
+                          </div>
+                        </div>
+                      </div>
+
+                      <div class="col-lg-8">
+                        <div class="card">
+                          <div class="card-body">
+                            <h6 class="mb-3">Body (JSON)</h6>
+                            <textarea class="form-control" name="body_json" style="min-height:360px; font-family: ui-monospace, Menlo, Consolas, monospace; font-size:12px;"><?php echo h($bodyJson); ?></textarea>
+                            <div class="text-muted mt-2" style="font-size:12px;">
+                              Not: Şimdilik JSON; sonra form/fields’e böleriz.
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+
+                    </div>
+                  </form>
+
+                </div>
+              </div>
+            </div>
+
+          </div>
         </div>
-        <div style="flex:2">
-          <div class="small">title</div>
-          <input type="text" name="title" value="<?php echo h($title); ?>" placeholder="Başlık">
-        </div>
+
+        <div class="content-backdrop fade"></div>
       </div>
-
-      <div class="bar">
-        <div style="flex:1">
-          <div class="small">status</div>
-          <select name="status">
-            <?php foreach (['draft','saved','approving','approved','cancelled'] as $st): ?>
-              <option value="<?php echo h($st); ?>" <?php echo ($st===$status?'selected':''); ?>>
-                <?php echo h($st); ?>
-              </option>
-            <?php endforeach; ?>
-          </select>
-          <div class="small">Not: cancelled seçsen bile sonra tekrar başka statüye alıp kaydedebilirsin.</div>
-        </div>
-      </div>
-
-      <!-- ✅ Version select -->
-      <div class="bar">
-        <div style="flex:1">
-          <div class="small">Version (yüklemek için)</div>
-          <select id="verSelect">
-            <?php if (empty($versions)): ?>
-              <option value="0" selected>latest</option>
-            <?php else: ?>
-              <option value="0" <?php echo ($selectedV<=0?'selected':''); ?>>latest (V<?php echo (int)$latestVersion; ?>)</option>
-              <?php foreach ($versions as $v): ?>
-                <option value="<?php echo (int)$v; ?>" <?php echo ((int)$selectedV===(int)$v ? 'selected' : ''); ?>>
-                  V<?php echo (int)$v; ?>
-                </option>
-              <?php endforeach; ?>
-            <?php endif; ?>
-          </select>
-          <div class="small">Seçince sayfa reload olur, body o versiyondan açılır.</div>
-        </div>
-      </div>
-
-      <div class="bar">
-        <button class="btn btn-primary" type="submit">Kaydet</button>
-
-        <a class="btn" target="_blank"
-           href="/php-mongo-erp/public/audit_view.php?module=<?php echo urlencode($module); ?>&doc_type=<?php echo urlencode($docType); ?>&doc_id=<?php echo urlencode($docId); ?>">
-          Audit View
-        </a>
-
-        <a class="btn" target="_blank"
-           href="/php-mongo-erp/public/timeline.php?module=<?php echo urlencode($module); ?>&doc_type=<?php echo urlencode($docType); ?>&doc_id=<?php echo urlencode($docId); ?>">
-          Timeline
-        </a>
-      </div>
-
-      <div class="small">
-        Not: Kaydet her zaman yeni version üretir (V+1). Seçili versiyonu ezmez.
-      </div>
-    </div>
-
-    <div class="card">
-      <div class="small"><b>Body (JSON)</b></div>
-      <textarea name="body_json"><?php echo h($bodyJson); ?></textarea>
-      <div class="small" style="margin-top:6px;">Not: Şimdilik JSON; sonra form/fields’e böleriz.</div>
     </div>
   </div>
-</form>
+
+  <div class="layout-overlay layout-menu-toggle"></div>
+  <div class="drag-target"></div>
+</div>
+
+<?php require_once __DIR__ . '/../app/views/layout/footer.php'; ?>
 
 <script>
 (function(){

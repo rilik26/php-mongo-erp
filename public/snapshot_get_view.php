@@ -1,14 +1,12 @@
 <?php
 /**
- * public/snapshot_get_view.php
+ * public/snapshot_get_view.php (FINAL - THEME)
  *
- * Snapshot HTML View (V1)
  * - snapshot_id ile API'den snapshot getirir
  * - Kart UI ile gösterir
  * - JSON linki + Diff linki + Audit/Timeline linki verir
  *
- * Guard:
- * - login şart
+ * Guard: login şart
  */
 
 require_once __DIR__ . '/../core/bootstrap.php';
@@ -24,9 +22,7 @@ if (!isset($_SESSION['context']) || !is_array($_SESSION['context'])) {
   exit;
 }
 
-try {
-  Context::bootFromSession();
-} catch (ContextException $e) {
+try { Context::bootFromSession(); } catch (ContextException $e) {
   header('Location: /php-mongo-erp/public/login.php');
   exit;
 }
@@ -38,44 +34,68 @@ ActionLogger::info('SNAPSHOT.VIEW', [
 ], $ctx);
 
 $snapshotId = trim($_GET['snapshot_id'] ?? '');
+
+function h($s): string { return htmlspecialchars((string)$s, ENT_QUOTES, 'UTF-8'); }
+
+require_once __DIR__ . '/../app/views/layout/header.php';
 ?>
-<!doctype html>
-<html>
-<head>
-  <meta charset="utf-8">
-  <title>Snapshot</title>
-  <style>
-    body{ font-family: Arial, sans-serif; }
-    .card{ border:1px solid #eee; padding:12px; border-radius:12px; background:#fff; margin:10px 0; }
-    .bar{ display:flex; gap:10px; align-items:center; flex-wrap:wrap; margin:10px 0; }
-    .btn{ padding:6px 10px; border:1px solid #ccc; background:#fff; cursor:pointer; text-decoration:none; color:#000; border-radius:6px; display:inline-block; }
-    .btn-primary{ border-color:#1e88e5; background:#1e88e5; color:#fff; }
-    .small{ font-size:12px; color:#666; }
-    .code{ font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace; }
-    pre{ background:#0b1020; color:#eaeef7; padding:12px; border-radius:10px; overflow:auto; }
-    input{ padding:6px 8px; border:1px solid #ddd; border-radius:8px; background:#fff; color:#000; }
-  </style>
-</head>
 <body>
+<div class="layout-wrapper layout-content-navbar">
+  <div class="layout-container">
 
-<?php require_once __DIR__ . '/../app/views/layout/header.php'; ?>
+    <?php require_once __DIR__ . '/../app/views/layout/left.php'; ?>
 
-<h3>Snapshot View</h3>
+    <div class="layout-page">
+      <?php require_once __DIR__ . '/../app/views/layout/header2.php'; ?>
 
-<div class="card">
-  <div class="bar">
-    <label class="small">snapshot_id</label>
-    <input id="sid" type="text" style="width:520px" value="<?php echo htmlspecialchars($snapshotId, ENT_QUOTES, 'UTF-8'); ?>" placeholder="...">
-    <button class="btn btn-primary" id="btnLoad">Getir</button>
-    <a class="btn" href="/php-mongo-erp/public/docs.php">Evrak Listesi</a>
+      <div class="content-wrapper">
+        <div class="container-xxl flex-grow-1 container-p-y">
+
+          <div class="card">
+            <div class="card-body">
+              <div class="d-flex align-items-center justify-content-between flex-wrap gap-2">
+                <div>
+                  <h4 class="mb-1">Snapshot View</h4>
+                  <div class="text-muted" style="font-size:12px;">
+                    Kullanıcı: <strong><?php echo h($ctx['username'] ?? ''); ?></strong>
+                    &nbsp;|&nbsp; Firma: <strong><?php echo h($ctx['CDEF01_id'] ?? ''); ?></strong>
+                    &nbsp;|&nbsp; Dönem: <strong><?php echo h($ctx['period_id'] ?? ''); ?></strong>
+                  </div>
+                </div>
+              </div>
+
+              <div class="row g-3 mt-4 align-items-end">
+                <div class="col-lg-7">
+                  <label class="form-label">snapshot_id</label>
+                  <input id="sid" class="form-control" type="text"
+                         value="<?php echo h($snapshotId); ?>" placeholder="...">
+                </div>
+                <div class="col-lg-5 d-flex gap-2">
+                  <button class="btn btn-primary" id="btnLoad" type="button">Getir</button>
+                  <a class="btn btn-outline-primary" href="/php-mongo-erp/public/docs.php">Evrak Listesi</a>
+                </div>
+              </div>
+
+              <div id="meta" class="text-muted mt-3" style="font-size:12px;">Hazır.</div>
+              <div id="links" class="d-flex flex-wrap gap-2 mt-3" style="display:none;"></div>
+
+              <h5 class="mt-4 mb-2">Snapshot JSON (pretty)</h5>
+              <pre id="out" style="background:#0b1020;color:#eaeef7;padding:12px;border-radius:12px;overflow:auto;min-height:160px;">Yükleniyor…</pre>
+
+            </div>
+          </div>
+
+        </div>
+        <div class="content-backdrop fade"></div>
+      </div>
+    </div>
   </div>
 
-  <div id="meta" class="small">Hazır.</div>
-  <div id="links" class="bar" style="display:none;"></div>
-
-  <h4 style="margin:10px 0 6px;">Snapshot JSON (pretty)</h4>
-  <pre id="out">Yükleniyor…</pre>
+  <div class="layout-overlay layout-menu-toggle"></div>
+  <div class="drag-target"></div>
 </div>
+
+<?php require_once __DIR__ . '/../app/views/layout/footer.php'; ?>
 
 <script>
 (function(){
@@ -112,14 +132,15 @@ $snapshotId = trim($_GET['snapshot_id'] ?? '');
 
     outEl.textContent = 'Yükleniyor…';
     metaEl.textContent = '...';
+    linksEl.style.display = 'none';
+    linksEl.innerHTML = '';
 
     const r = await fetch(api.toString(), { method:'GET', credentials:'same-origin' });
     const j = await r.json();
 
     if (!j.ok){
       outEl.textContent = JSON.stringify(j, null, 2);
-      metaEl.innerHTML = '<span style="color:red">Hata:</span> ' + esc(j.error || 'api_error');
-      linksEl.style.display = 'none';
+      metaEl.innerHTML = '<span class="text-danger">Hata:</span> ' + esc(j.error || 'api_error');
       return;
     }
 
@@ -131,10 +152,10 @@ $snapshotId = trim($_GET['snapshot_id'] ?? '');
     const prevId = s.prev_snapshot_id || null;
 
     metaEl.innerHTML =
-      '<span class="code">v' + esc(ver) + '</span>' +
-      ' — ' + esc(fmtTR(created)) +
-      ' — <strong>' + esc(user) + '</strong>' +
-      (targetKey ? ' — target_key: <span class="code">' + esc(targetKey) + '</span>' : '');
+      `<span class="badge bg-label-primary">v${esc(ver)}</span>` +
+      ` <span class="ms-2">${esc(fmtTR(created))}</span>` +
+      ` <span class="ms-2"><strong>${esc(user)}</strong></span>` +
+      (targetKey ? ` <span class="ms-2">target_key: <span class="font-monospace">${esc(targetKey)}</span></span>` : '');
 
     const jsonUrl = '/php-mongo-erp/public/api/snapshot_get.php?snapshot_id=' + encodeURIComponent(sid);
     const diffUrl = '/php-mongo-erp/public/snapshot_diff_view.php?snapshot_id=' + encodeURIComponent(sid);
@@ -142,14 +163,14 @@ $snapshotId = trim($_GET['snapshot_id'] ?? '');
     const tlUrl    = targetKey ? ('/php-mongo-erp/public/timeline.php?target_key=' + encodeURIComponent(targetKey)) : '#';
 
     let linksHtml = '';
-    linksHtml += '<a class="btn" target="_blank" href="' + esc(jsonUrl) + '">JSON</a>';
-    linksHtml += '<a class="btn" target="_blank" href="' + esc(diffUrl) + '">Diff</a>';
+    linksHtml += `<a class="btn btn-outline-primary btn-sm" target="_blank" href="${esc(jsonUrl)}">JSON</a>`;
+    linksHtml += `<a class="btn btn-outline-primary btn-sm" target="_blank" href="${esc(diffUrl)}">Diff</a>`;
     if (targetKey){
-      linksHtml += '<a class="btn" target="_blank" href="' + esc(auditUrl) + '">Audit</a>';
-      linksHtml += '<a class="btn" target="_blank" href="' + esc(tlUrl) + '">Timeline</a>';
+      linksHtml += `<a class="btn btn-outline-primary btn-sm" target="_blank" href="${esc(auditUrl)}">Audit</a>`;
+      linksHtml += `<a class="btn btn-outline-primary btn-sm" target="_blank" href="${esc(tlUrl)}">Timeline</a>`;
     }
     if (prevId){
-      linksHtml += '<a class="btn" href="/php-mongo-erp/public/snapshot_get_view.php?snapshot_id=' + encodeURIComponent(prevId) + '">← Önceki Versiyon</a>';
+      linksHtml += `<a class="btn btn-outline-secondary btn-sm" href="/php-mongo-erp/public/snapshot_get_view.php?snapshot_id=${encodeURIComponent(prevId)}">← Önceki Versiyon</a>`;
     }
 
     linksEl.innerHTML = linksHtml;
@@ -159,8 +180,6 @@ $snapshotId = trim($_GET['snapshot_id'] ?? '');
   }
 
   btn.addEventListener('click', load);
-
-  // page load auto
   load();
 })();
 </script>

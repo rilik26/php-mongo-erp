@@ -1,6 +1,6 @@
 <?php
 /**
- * public/timeline.php (FINAL)
+ * public/timeline.php (FINAL - THEME)
  *
  * - Event listesi kart UI
  * - TR tarih/saat formatı
@@ -9,6 +9,8 @@
  *
  * ✅ GENDOC kartlarında doc_no/title/status otomatik dolsun:
  *    target -> summary -> snapshot.target fallback
+ *
+ * ✅ Theme Layout: header / left / header2 / footer
  */
 
 require_once __DIR__ . '/../core/bootstrap.php';
@@ -33,7 +35,6 @@ try {
 
 $ctx = Context::get();
 
-// View log
 ActionLogger::info('TIMELINE.VIEW', [
   'source' => 'public/timeline.php'
 ], $ctx);
@@ -92,9 +93,7 @@ $cur = MongoManager::collection('EVENT01E')->find(
 
 $events = iterator_to_array($cur);
 
-function esc($s): string {
-  return htmlspecialchars((string)$s, ENT_QUOTES, 'UTF-8');
-}
+function esc($s): string { return htmlspecialchars((string)$s, ENT_QUOTES, 'UTF-8'); }
 
 function fmt_tr($iso): string {
   if (!$iso) return '-';
@@ -137,9 +136,7 @@ function event_title(string $code): string {
   return $map[$code] ?? $code;
 }
 
-/**
- * ✅ snapshot'tan target meta çek (cache'li)
- */
+// ✅ snapshot'tan target meta çek (cache'li)
 $snapMetaCache = []; // snapshot_id => ['doc_no'=>..,'doc_title'=>..,'status'=>..,'version'=>..]
 function snapshot_target_meta(?string $snapshotId) {
   global $snapMetaCache;
@@ -178,9 +175,7 @@ function snapshot_target_meta(?string $snapshotId) {
   return $out;
 }
 
-/**
- * ✅ event için doc meta çöz (target -> summary -> snapshot.target)
- */
+// ✅ event için doc meta çöz (target -> summary -> snapshot.target)
 function resolve_doc_meta(array $ev): array
 {
   $target = (array)($ev['target'] ?? []);
@@ -212,297 +207,288 @@ function resolve_doc_meta(array $ev): array
   return [$docNo, $docTitle, $status];
 }
 
+/** ✅ THEME HEAD */
+require_once __DIR__ . '/../app/views/layout/header.php';
 ?>
-<!doctype html>
-<html>
-<head>
-  <meta charset="utf-8">
-  <title>Timeline</title>
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <style>
-    :root{
-      --bg:#1f2233;
-      --panel:#272b40;
-      --panel2:#2d3250;
-      --text:#e7eaf3;
-      --muted:#a7adc3;
-      --border:rgba(255,255,255,.10);
-      --primary:#5865f2;
-      --chip:#3b4163;
-    }
-    body{ margin:0; background:var(--bg); color:var(--text); font-family: Arial, sans-serif; }
-    .wrap{ max-width:1200px; margin:0 auto; padding:18px; }
-
-    h1{ margin:0 0 12px; font-size:34px; letter-spacing:.2px; }
-    .sub{ color:var(--muted); font-size:13px; margin-bottom:10px; }
-
-    .bar{
-      display:grid;
-      grid-template-columns: 1fr 1fr 1fr 1fr 1fr auto auto;
-      gap:12px;
-      align-items:center;
-      margin: 10px 0 14px;
-    }
-    @media (max-width: 980px){
-      .bar{ grid-template-columns: 1fr 1fr; }
-    }
-
-    .in{
-      width:100%;
-      height:44px;
-      box-sizing:border-box;
-      background:var(--panel);
-      color:var(--text);
-      border:1px solid var(--border);
-      border-radius:12px;
-      padding:0 12px;
-      outline:none;
-    }
-    .in::placeholder{ color:rgba(231,234,243,.55); }
-    .in:focus{ border-color: rgba(88,101,242,.65); box-shadow: 0 0 0 3px rgba(88,101,242,.15); }
-
-    .btn{
-      height:44px;
-      padding:0 16px;
-      border-radius:12px;
-      border:1px solid var(--border);
-      background:transparent;
-      color:var(--text);
-      cursor:pointer;
-      text-decoration:none;
-      display:inline-flex;
-      align-items:center;
-      gap:8px;
-      justify-content:center;
-      white-space:nowrap;
-    }
-    .btn-primary{
-      background:var(--primary);
-      border-color: transparent;
-      color:#fff;
-    }
-    .btn:hover{ filter: brightness(1.05); }
-    .btn:active{ transform: translateY(1px); }
-
-    .cards{ display:flex; flex-direction:column; gap:12px; margin-top:12px; }
-
-    .card{
-      background:var(--panel2);
-      border:1px solid var(--border);
-      border-radius:16px;
-      padding:14px 14px 12px;
-    }
-
-    .row1{
-      display:flex;
-      gap:10px;
-      align-items:center;
-      justify-content:space-between;
-      flex-wrap:wrap;
-      margin-bottom:8px;
-    }
-
-    .title{
-      font-size:16px;
-      font-weight:bold;
-      display:flex;
-      gap:10px;
-      align-items:center;
-      flex-wrap:wrap;
-    }
-
-    .code{
-      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
-      background:rgba(0,0,0,.22);
-      padding:3px 8px;
-      border-radius:10px;
-      border:1px solid var(--border);
-      color:rgba(231,234,243,.95);
-      font-size:12px;
-    }
-
-    .meta{
-      color:var(--muted);
-      font-size:13px;
-      display:flex;
-      gap:10px;
-      align-items:center;
-      flex-wrap:wrap;
-    }
-
-    .chips{ display:flex; gap:8px; flex-wrap:wrap; margin-top:8px; }
-    .chip{
-      background:var(--chip);
-      border:1px solid var(--border);
-      padding:5px 10px;
-      border-radius:999px;
-      font-size:12px;
-      color:rgba(231,234,243,.95);
-    }
-
-    .grid2{
-      display:grid;
-      grid-template-columns: 1fr 1fr;
-      gap:10px;
-      margin-top:10px;
-    }
-    @media (max-width: 980px){ .grid2{ grid-template-columns: 1fr; } }
-
-    .box{
-      background:rgba(0,0,0,.14);
-      border:1px solid var(--border);
-      border-radius:14px;
-      padding:10px;
-      min-height:52px;
-    }
-    .box h4{ margin:0 0 8px; font-size:13px; color:rgba(231,234,243,.9); }
-    .kv{ font-size:12px; color:var(--muted); line-height:1.55; }
-    .kv b{ color:rgba(231,234,243,.95); font-weight:600; }
-
-    .actions{
-      display:flex;
-      gap:8px;
-      flex-wrap:wrap;
-      margin-top:10px;
-    }
-  </style>
-</head>
 <body>
+<div class="layout-wrapper layout-content-navbar">
+  <div class="layout-container">
 
-<div class="wrap">
-  <h1>Timeline</h1>
+    <?php require_once __DIR__ . '/../app/views/layout/left.php'; ?>
 
-  <div class="sub">
-    Firma: <b><?php echo esc($ctx['CDEF01_id'] ?? ''); ?></b>
-    &nbsp;|&nbsp; Dönem: <b><?php echo esc($ctx['period_id'] ?? ''); ?></b>
-    &nbsp;|&nbsp; Kullanıcı: <b><?php echo esc($ctx['username'] ?? ''); ?></b>
-  </div>
+    <div class="layout-page">
+      <?php require_once __DIR__ . '/../app/views/layout/header2.php'; ?>
 
-  <form method="GET" class="bar">
-    <input class="in" name="event"    value="<?php echo esc($eventCode); ?>" placeholder="event_code (örn: GENDOC.ADMIN.SAVE)">
-    <input class="in" name="user"     value="<?php echo esc($username); ?>"  placeholder="username (örn: admin)">
-    <input class="in" name="module"   value="<?php echo esc($module); ?>"    placeholder="module (örn: gen)">
-    <input class="in" name="doc_type" value="<?php echo esc($docType); ?>"   placeholder="doc_type (örn: GENDOC01T)">
-    <input class="in" name="doc_id"   value="<?php echo esc($docId); ?>"     placeholder="doc_id (örn: DOC-001)">
-    <button class="btn btn-primary" type="submit">Getir</button>
-    <a class="btn" href="/php-mongo-erp/public/timeline.php">Sıfırla</a>
-    <input type="hidden" name="limit" value="<?php echo (int)$limit; ?>">
-  </form>
+      <div class="content-wrapper">
+        <div class="container-xxl flex-grow-1 container-p-y">
 
-  <div class="cards">
-    <?php if (empty($events)): ?>
-      <div class="card">
-        <div class="meta">Kayıt bulunamadı.</div>
-      </div>
-    <?php endif; ?>
+          <style>
+            .tl-wrap{ max-width:1200px; margin:0 auto; }
+            .tl-title{ font-size:22px; font-weight:800; margin:0 0 8px; }
+            .tl-sub{ font-size:12px; color:rgba(0,0,0,.55); margin-bottom:10px; }
 
-    <?php foreach ($events as $ev):
-      $code = (string)($ev['event_code'] ?? '');
-      $tIso = (string)($ev['created_at'] ?? '');
-      $tTr  = fmt_tr($tIso);
-      $user = (string)($ev['context']['username'] ?? '');
-      $target = (array)($ev['target'] ?? []);
-      $refs   = (array)($ev['refs'] ?? []);
-      $data   = (array)($ev['data'] ?? []);
+            .tl-form{
+              display:grid;
+              grid-template-columns: 1fr 1fr 1fr 1fr 1fr auto auto;
+              gap:10px;
+              align-items:center;
+              margin: 10px 0 14px;
+            }
+            @media (max-width: 980px){
+              .tl-form{ grid-template-columns: 1fr 1fr; }
+            }
 
-      $sum = $data['summary'] ?? null;
+            .tl-in{
+              width:100%;
+              height:42px;
+              box-sizing:border-box;
+              background:#fff;
+              color:#111;
+              border:1px solid rgba(0,0,0,.12);
+              border-radius:12px;
+              padding:0 12px;
+              outline:none;
+            }
+            .tl-in::placeholder{ color:rgba(0,0,0,.40); }
+            .tl-in:focus{ border-color: rgba(30,136,229,.55); box-shadow: 0 0 0 3px rgba(30,136,229,.12); }
 
-      $logId  = $refs['log_id'] ?? null;
-      $snapId = $refs['snapshot_id'] ?? null;
-      $prevId = $refs['prev_snapshot_id'] ?? null;
+            .tl-btn{
+              height:42px;
+              padding:0 14px;
+              border-radius:12px;
+              border:1px solid rgba(0,0,0,.12);
+              background:#fff;
+              color:#111;
+              cursor:pointer;
+              text-decoration:none;
+              display:inline-flex;
+              align-items:center;
+              justify-content:center;
+              white-space:nowrap;
+              gap:8px;
+            }
+            .tl-btn-primary{ background:#1e88e5; border-color:#1e88e5; color:#fff; }
+            .tl-btn:hover{ filter:brightness(.98); }
 
-      $tMod = (string)($target['module'] ?? '-');
-      $tDt  = (string)($target['doc_type'] ?? '-');
-      $tDi  = (string)($target['doc_id'] ?? '-');
+            .tl-cards{ display:flex; flex-direction:column; gap:12px; margin-top:12px; }
+            .tl-card{
+              background:#fff;
+              border:1px solid rgba(0,0,0,.10);
+              border-radius:16px;
+              padding:14px;
+            }
 
-      // ✅ doc meta auto-fill (target -> summary -> snapshot.target)
-      [$docNoAuto, $titleAuto, $statusAuto] = resolve_doc_meta($ev);
+            .tl-row1{
+              display:flex; gap:10px; align-items:center; justify-content:space-between;
+              flex-wrap:wrap; margin-bottom:8px;
+            }
+            .tl-evtitle{
+              font-size:15px;
+              font-weight:800;
+              display:flex;
+              gap:10px;
+              align-items:center;
+              flex-wrap:wrap;
+            }
 
-      // summary chips (version vs)
-      $sumVersion = (is_array($sum) ? (string)($sum['version'] ?? '') : '');
-    ?>
-      <div class="card">
-        <div class="row1">
-          <div class="title">
-            <?php echo esc(event_title($code)); ?>
-            <span class="code"><?php echo esc($code); ?></span>
-          </div>
-          <div class="meta">
-            <span><?php echo esc($tTr); ?></span>
-            <span>—</span>
-            <b><?php echo esc($user ?: '-'); ?></b>
-          </div>
-        </div>
+            .tl-code{
+              font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+              background:rgba(0,0,0,.05);
+              padding:3px 8px;
+              border-radius:999px;
+              border:1px solid rgba(0,0,0,.10);
+              color:#111;
+              font-size:12px;
+            }
 
-        <div class="chips">
-          <span class="chip">module: <b><?php echo esc($tMod); ?></b></span>
-          <span class="chip">doc_type: <b><?php echo esc($tDt); ?></b></span>
-          <span class="chip">doc_id: <b><?php echo esc($tDi); ?></b></span>
+            .tl-meta{
+              color:rgba(0,0,0,.55);
+              font-size:12px;
+              display:flex;
+              gap:10px;
+              align-items:center;
+              flex-wrap:wrap;
+            }
 
-          <?php if ($docNoAuto !== ''): ?>
-            <span class="chip">doc_no: <b><?php echo esc($docNoAuto); ?></b></span>
-          <?php endif; ?>
-          <?php if ($titleAuto !== ''): ?>
-            <span class="chip">title: <b><?php echo esc($titleAuto); ?></b></span>
-          <?php endif; ?>
-          <?php if ($statusAuto !== ''): ?>
-            <span class="chip">status: <b><?php echo esc($statusAuto); ?></b></span>
-          <?php endif; ?>
-          <?php if ($sumVersion !== ''): ?>
-            <span class="chip">version: <b><?php echo esc($sumVersion); ?></b></span>
-          <?php endif; ?>
-        </div>
+            .tl-chips{ display:flex; gap:8px; flex-wrap:wrap; margin-top:8px; }
+            .tl-chip{
+              background:rgba(0,0,0,.03);
+              border:1px solid rgba(0,0,0,.10);
+              padding:5px 10px;
+              border-radius:999px;
+              font-size:12px;
+              color:rgba(0,0,0,.80);
+            }
+            .tl-chip b{ color:#111; }
 
-        <div class="grid2">
-          <div class="box">
-            <h4>Özet</h4>
-            <div class="kv">
-              <?php if (is_array($sum) && !empty($sum)): ?>
-                <?php foreach ($sum as $k => $v):
-                  $vv = is_array($v) ? json_encode($v, JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES) : (string)$v;
-                ?>
-                  <div><b><?php echo esc($k); ?></b>: <?php echo esc($vv); ?></div>
-                <?php endforeach; ?>
-              <?php else: ?>
-                <span>-</span>
+            .tl-grid2{
+              display:grid;
+              grid-template-columns: 1fr 1fr;
+              gap:10px;
+              margin-top:10px;
+            }
+            @media (max-width: 980px){ .tl-grid2{ grid-template-columns: 1fr; } }
+
+            .tl-box{
+              background:rgba(0,0,0,.03);
+              border:1px solid rgba(0,0,0,.10);
+              border-radius:14px;
+              padding:10px;
+              min-height:52px;
+            }
+            .tl-box h4{ margin:0 0 8px; font-size:13px; color:#111; font-weight:800; }
+            .tl-kv{ font-size:12px; color:rgba(0,0,0,.65); line-height:1.55; }
+            .tl-kv b{ color:#111; font-weight:700; }
+
+            .tl-actions{ display:flex; gap:8px; flex-wrap:wrap; margin-top:10px; }
+            .tl-dim{ opacity:.45; cursor:default; }
+          </style>
+
+          <div class="tl-wrap">
+            <div class="tl-title">Timeline</div>
+
+            <div class="tl-sub">
+              Firma: <b><?php echo esc($ctx['CDEF01_id'] ?? ''); ?></b>
+              &nbsp;|&nbsp; Dönem: <b><?php echo esc($ctx['period_id'] ?? ''); ?></b>
+              &nbsp;|&nbsp; Kullanıcı: <b><?php echo esc($ctx['username'] ?? ''); ?></b>
+            </div>
+
+            <form method="GET" class="tl-form">
+              <input class="tl-in" name="event"    value="<?php echo esc($eventCode); ?>" placeholder="event_code (örn: GENDOC.ADMIN.SAVE)">
+              <input class="tl-in" name="user"     value="<?php echo esc($username); ?>"  placeholder="username (örn: admin)">
+              <input class="tl-in" name="module"   value="<?php echo esc($module); ?>"    placeholder="module (örn: gen)">
+              <input class="tl-in" name="doc_type" value="<?php echo esc($docType); ?>"   placeholder="doc_type (örn: GENDOC01T)">
+              <input class="tl-in" name="doc_id"   value="<?php echo esc($docId); ?>"     placeholder="doc_id (örn: DOC-001)">
+              <button class="tl-btn tl-btn-primary" type="submit">Getir</button>
+              <a class="tl-btn" href="/php-mongo-erp/public/timeline.php">Sıfırla</a>
+              <input type="hidden" name="limit" value="<?php echo (int)$limit; ?>">
+            </form>
+
+            <div class="tl-cards">
+              <?php if (empty($events)): ?>
+                <div class="tl-card">
+                  <div class="tl-meta">Kayıt bulunamadı.</div>
+                </div>
               <?php endif; ?>
+
+              <?php foreach ($events as $ev):
+                $code = (string)($ev['event_code'] ?? '');
+                $tIso = (string)($ev['created_at'] ?? '');
+                $tTr  = fmt_tr($tIso);
+                $user = (string)($ev['context']['username'] ?? '');
+                $target = (array)($ev['target'] ?? []);
+                $refs   = (array)($ev['refs'] ?? []);
+                $data   = (array)($ev['data'] ?? []);
+
+                $sum = $data['summary'] ?? null;
+
+                $logId  = $refs['log_id'] ?? null;
+                $snapId = $refs['snapshot_id'] ?? null;
+                $prevId = $refs['prev_snapshot_id'] ?? null;
+
+                $tMod = (string)($target['module'] ?? '-');
+                $tDt  = (string)($target['doc_type'] ?? '-');
+                $tDi  = (string)($target['doc_id'] ?? '-');
+
+                [$docNoAuto, $titleAuto, $statusAuto] = resolve_doc_meta($ev);
+                $sumVersion = (is_array($sum) ? (string)($sum['version'] ?? '') : '');
+              ?>
+                <div class="tl-card">
+                  <div class="tl-row1">
+                    <div class="tl-evtitle">
+                      <?php echo esc(event_title($code)); ?>
+                      <span class="tl-code"><?php echo esc($code); ?></span>
+                    </div>
+                    <div class="tl-meta">
+                      <span><?php echo esc($tTr); ?></span>
+                      <span>—</span>
+                      <b><?php echo esc($user ?: '-'); ?></b>
+                    </div>
+                  </div>
+
+                  <div class="tl-chips">
+                    <span class="tl-chip">module: <b><?php echo esc($tMod); ?></b></span>
+                    <span class="tl-chip">doc_type: <b><?php echo esc($tDt); ?></b></span>
+                    <span class="tl-chip">doc_id: <b><?php echo esc($tDi); ?></b></span>
+
+                    <?php if ($docNoAuto !== ''): ?>
+                      <span class="tl-chip">doc_no: <b><?php echo esc($docNoAuto); ?></b></span>
+                    <?php endif; ?>
+                    <?php if ($titleAuto !== ''): ?>
+                      <span class="tl-chip">title: <b><?php echo esc($titleAuto); ?></b></span>
+                    <?php endif; ?>
+                    <?php if ($statusAuto !== ''): ?>
+                      <span class="tl-chip">status: <b><?php echo esc($statusAuto); ?></b></span>
+                    <?php endif; ?>
+                    <?php if ($sumVersion !== ''): ?>
+                      <span class="tl-chip">version: <b><?php echo esc($sumVersion); ?></b></span>
+                    <?php endif; ?>
+                  </div>
+
+                  <div class="tl-grid2">
+                    <div class="tl-box">
+                      <h4>Özet</h4>
+                      <div class="tl-kv">
+                        <?php if (is_array($sum) && !empty($sum)): ?>
+                          <?php foreach ($sum as $k => $v):
+                            $vv = is_array($v) ? json_encode($v, JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES) : (string)$v;
+                          ?>
+                            <div><b><?php echo esc($k); ?></b>: <?php echo esc($vv); ?></div>
+                          <?php endforeach; ?>
+                        <?php else: ?>
+                          <span>-</span>
+                        <?php endif; ?>
+                      </div>
+                    </div>
+
+                    <div class="tl-box">
+                      <h4>Refs</h4>
+                      <div class="tl-kv">
+                        <div><b>log_id</b>: <?php echo esc($logId ?: '-'); ?></div>
+                        <div><b>snapshot_id</b>: <?php echo esc($snapId ?: '-'); ?></div>
+                        <div><b>prev_snapshot_id</b>: <?php echo esc($prevId ?: '-'); ?></div>
+                        <div><b>request_id</b>: <?php echo esc($refs['request_id'] ?? '-'); ?></div>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div class="tl-actions">
+                    <?php if ($logId): ?>
+                      <a class="tl-btn" target="_blank" href="/php-mongo-erp/public/log_view.php?log_id=<?php echo urlencode($logId); ?>">LOG</a>
+                    <?php else: ?>
+                      <span class="tl-btn tl-dim">LOG</span>
+                    <?php endif; ?>
+
+                    <?php if ($snapId): ?>
+                      <a class="tl-btn" target="_blank" href="/php-mongo-erp/public/snapshot_view.php?snapshot_id=<?php echo urlencode($snapId); ?>">SNAPSHOT</a>
+                    <?php else: ?>
+                      <span class="tl-btn tl-dim">SNAPSHOT</span>
+                    <?php endif; ?>
+
+                    <?php if ($snapId && $prevId): ?>
+                      <a class="tl-btn" target="_blank" href="/php-mongo-erp/public/snapshot_diff_view.php?snapshot_id=<?php echo urlencode($snapId); ?>">DIFF</a>
+                    <?php else: ?>
+                      <span class="tl-btn tl-dim">DIFF</span>
+                    <?php endif; ?>
+                  </div>
+                </div>
+              <?php endforeach; ?>
             </div>
+
           </div>
 
-          <div class="box">
-            <h4>Refs</h4>
-            <div class="kv">
-              <div><b>log_id</b>: <?php echo esc($logId ?: '-'); ?></div>
-              <div><b>snapshot_id</b>: <?php echo esc($snapId ?: '-'); ?></div>
-              <div><b>prev_snapshot_id</b>: <?php echo esc($prevId ?: '-'); ?></div>
-              <div><b>request_id</b>: <?php echo esc($refs['request_id'] ?? '-'); ?></div>
-            </div>
-          </div>
         </div>
 
-        <div class="actions">
-          <?php if ($logId): ?>
-            <a class="btn" target="_blank" href="/php-mongo-erp/public/log_view.php?log_id=<?php echo urlencode($logId); ?>">LOG</a>
-          <?php else: ?>
-            <span class="btn" style="opacity:.45; cursor:default;">LOG</span>
-          <?php endif; ?>
-
-          <?php if ($snapId): ?>
-            <a class="btn" target="_blank" href="/php-mongo-erp/public/snapshot_view.php?snapshot_id=<?php echo urlencode($snapId); ?>">SNAPSHOT</a>
-          <?php else: ?>
-            <span class="btn" style="opacity:.45; cursor:default;">SNAPSHOT</span>
-          <?php endif; ?>
-
-          <?php if ($snapId && $prevId): ?>
-            <a class="btn" target="_blank" href="/php-mongo-erp/public/snapshot_diff_view.php?snapshot_id=<?php echo urlencode($snapId); ?>">DIFF</a>
-          <?php else: ?>
-            <span class="btn" style="opacity:.45; cursor:default;">DIFF</span>
-          <?php endif; ?>
-        </div>
+        <div class="content-backdrop fade"></div>
       </div>
-    <?php endforeach; ?>
+    </div>
   </div>
+
+  <div class="layout-overlay layout-menu-toggle"></div>
+  <div class="drag-target"></div>
 </div>
+
+<?php require_once __DIR__ . '/../app/views/layout/footer.php'; ?>
 
 </body>
 </html>

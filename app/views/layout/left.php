@@ -68,54 +68,93 @@
 
           <ul class="menu-inner py-1">
             <!-- Dashboards -->
-            <li class="menu-item active open">
+            <li class="menu-item">
               <a href="javascript:void(0);" class="menu-link menu-toggle">
                 <i class="menu-icon icon-base ri ri-home-smile-line"></i>
-                <div>Sistem</div>
-                <div class="badge badge-center text-bg-danger rounded-pill ms-auto">5</div>
+                <div><?php _e('main.menu.system'); ?></div>
               </a>
               <ul class="menu-sub">
                 <li class="menu-item">
-                  <a href="lang_admin.php" class="menu-link">
-                    <div>Lang Admin</div>
+                  <a href="javascript:void(0)" class="menu-link menu-toggle">
+                    <div><?php _e('system.menu.settings'); ?></div>
+                  </a>
+                  <ul class="menu-sub">
+                    <li class="menu-item">
+                      <a href="lang_admin.php" class="menu-link">
+                        <div><?php _e('system.menu.language.manager'); ?></div>
+                      </a>
+                    </li>
+                  </ul>
+                </li>
+                <li class="menu-item">
+                  <a href="approval.php" class="menu-link">
+                    <div>Approval</div>
                   </a>
                 </li>
                 <li class="menu-item">
-                   <a href="locks.php" class="menu-link">
-                    <div>Locks</div>
+                  <a href="audit_view.php" class="menu-link">
+                    <div>Audit View</div>
                   </a>
                 </li>
                 <li class="menu-item">
-                  <a href="timeline.php" class="menu-link">
-                    <div>timeline</div>
+                  <a href="change_period.php" class="menu-link">
+                    <div>Change Period</div>
                   </a>
                 </li>
                 <li class="menu-item">
                   <a href="docs.php" class="menu-link">
-                    <div>docs</div>
-                  </a>
-                </li>
-                
-                <li class="menu-item">
-                  <a href="audit_view.php" class="menu-link">
-                    <div>audit_view</div>
-                  </a>
-                </li>
-                <li class="menu-item">
-                  <a href="approval.php" class="menu-link">
-                    <div>approval</div>
+                    <div>Docs</div>
                   </a>
                 </li>
                 <li class="menu-item">
                   <a href="gendoc_admin.php" class="menu-link">
-                    <div>gendoc_admin</div>
+                    <div>Gendoc Admin</div>
                   </a>
                 </li>
                 <li class="menu-item">
                   <a href="gendoc_list.php" class="menu-link">
-                    <div>gendoc_list</div>
+                    <div>Gendoc List</div>
                   </a>
                 </li>
+                <li class="menu-item">
+                  <a href="locks.php" class="menu-link">
+                    <div>Locks</div>
+                  </a>
+                </li>
+                <li class="menu-item">
+                  <a href="log_get_view.php" class="menu-link">
+                    <div>Log Get View</div>
+                  </a>
+                </li>
+                <li class="menu-item">
+                  <a href="log_view.php" class="menu-link">
+                    <div>Log View</div>
+                  </a>
+                </li>
+                <li class="menu-item">
+                  <a href="snapshot_diff_view.php" class="menu-link">
+                    <div>Snapshot Diff View</div>
+                  </a>
+                </li>
+                <li class="menu-item">
+                  <a href="snapshot_get_view.php" class="menu-link">
+                    <div>Snapshot Get View</div>
+                  </a>
+                </li>
+                <li class="menu-item">
+                  <a href="snapshot_view.php" class="menu-link">
+                    <div>Snapshot View</div>
+                  </a>
+                </li>
+                <li class="menu-item">
+                  <a href="timeline.php" class="menu-link">
+                    <div>Timeline</div>
+                  </a>
+                </li>
+                
+                
+               
+                
               </ul>
             </li>
 

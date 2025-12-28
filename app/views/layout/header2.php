@@ -17,12 +17,14 @@ $username = $ctx['username'] ?? '';
 $company  = $ctx['CDEF01_id'] ?? '';
 $period   = $ctx['period_id'] ?? '';
 
-// _e fallback: i18n helper yoksa patlamasın
 if (!function_exists('_e')) {
   function _e(string $key, array $params = []): void { echo htmlspecialchars($key, ENT_QUOTES, 'UTF-8'); }
 }
 if (!function_exists('_t')) {
   function _t(string $key, array $params = []): string { return $key; }
+}
+if (!function_exists('h')) {
+  function h($s): string { return htmlspecialchars((string)$s, ENT_QUOTES, 'UTF-8'); }
 }
 
 // ---- language safe fallback ----
@@ -34,12 +36,10 @@ $activeLangs = [
 
 try {
   if (class_exists('LanguageManager')) {
-    // boot varsa çağır
     if (method_exists('LanguageManager', 'boot')) {
       LanguageManager::boot();
     }
 
-    // current lang
     if (method_exists('LanguageManager', 'get')) {
       $tmp = (string)LanguageManager::get();
       if ($tmp !== '') $lang = $tmp;
@@ -47,9 +47,8 @@ try {
       $lang = (string)$_SESSION['lang'];
     }
 
-    // aktif diller
     if (method_exists('LanguageManager', 'getActiveLangs')) {
-      $list = LanguageManager::getActiveLangs(); // array bekliyoruz
+      $list = LanguageManager::getActiveLangs();
       if (is_array($list) && !empty($list)) {
         $norm = [];
         foreach ($list as $it) {
@@ -74,13 +73,8 @@ try {
       }
     }
   }
-} catch (Throwable $e) {
-  // fallback kalsın
-}
+} catch (Throwable $e) {}
 
-function h($s): string { return htmlspecialchars((string)$s, ENT_QUOTES, 'UTF-8'); }
-
-// flag icon mapping (fi fi-??)
 function lang_flag_class(string $lc): string {
   $lc = strtolower(trim($lc));
   $map = [
@@ -96,7 +90,6 @@ function lang_flag_class(string $lc): string {
 
 $langFlag = lang_flag_class($lang);
 
-// next param: referer her zaman gelmeyebilir, kendimiz taşıyalım
 $next = $_SERVER['REQUEST_URI'] ?? '/php-mongo-erp/public/index.php';
 if ($next === '') $next = '/php-mongo-erp/public/index.php';
 ?>
@@ -112,7 +105,6 @@ if ($next === '') $next = '/php-mongo-erp/public/index.php';
 
   <div class="navbar-nav-right d-flex align-items-center justify-content-end" id="navbar-collapse">
 
-    <!-- Search -->
     <div class="navbar-nav align-items-center">
       <div class="nav-item navbar-search-wrapper mb-0">
         <a class="nav-item nav-link search-toggler px-0" href="javascript:void(0);">
@@ -120,7 +112,6 @@ if ($next === '') $next = '/php-mongo-erp/public/index.php';
         </a>
       </div>
     </div>
-    <!-- /Search -->
 
     <ul class="navbar-nav flex-row align-items-center ms-md-auto">
       <div>
@@ -128,7 +119,10 @@ if ($next === '') $next = '/php-mongo-erp/public/index.php';
           <strong><?php echo h($company); ?></strong>
         </span>
         <span style="margin-left:10px;"><?php _e('common.period'); ?>:
-          <strong><?php echo h($period); ?></strong>
+          <strong><?php echo h($period); ?> </strong>
+          <?php
+          
+          ?>
         </span>
       </div>
 
@@ -153,31 +147,38 @@ if ($next === '') $next = '/php-mongo-erp/public/index.php';
 
           <div class="dropdown-shortcuts-list scrollable-container">
             <div class="row row-bordered overflow-visible g-0">
-              <?php foreach ($activeLangs as $li):
-                $lc = strtolower(trim((string)($li['lang_code'] ?? '')));
-                if ($lc === '') continue;
 
-                $name = (string)($li['name'] ?? strtoupper($lc));
-                $flag = lang_flag_class($lc);
-                $isCurrent = ($lc === strtolower($lang));
+          <?php foreach ($activeLangs as $li):
+            $lc = strtolower(trim((string)($li['lang_code'] ?? '')));
+            if ($lc === '') continue;
 
-                // ✅ referer yerine next taşıyoruz
-                $href = '/php-mongo-erp/public/set_lang.php?lang=' . rawurlencode($lc)
-                      . '&next=' . rawurlencode($next);
-              ?>
-                <div class="dropdown-shortcuts-item col" style="<?php echo $isCurrent ? 'background:rgba(0,0,0,.03);' : ''; ?>">
-                  <span class="dropdown-shortcuts-icon rounded-circle mb-2">
-                    <i class="fi <?php echo h($flag); ?> fis" style="font-size:25px;"></i>
-                  </span>
-                  <div class="small" style="text-align:center; margin-top:-4px;">
-                    <?php echo h($name); ?>
-                    <?php if ($isCurrent): ?>
-                      <div class="small text-success">✔</div>
-                    <?php endif; ?>
-                  </div>
-                  <a href="<?php echo h($href); ?>" class="stretched-link"></a>
-                </div>
-              <?php endforeach; ?>
+            $name = (string)($li['name'] ?? strtoupper($lc));
+            $flag = lang_flag_class($lc);
+            $isCurrent = ($lc === strtolower((string)$lang));
+
+            $href = '/php-mongo-erp/public/set_lang.php?lang=' . rawurlencode($lc)
+                  . '&next=' . rawurlencode($next);
+
+            // ✅ seçili dil için hafif arkaplan
+            $style = $isCurrent ? 'background:rgba(0,0,0,.03);' : '';
+          ?>
+            <a class="dropdown-shortcuts-item col"
+              href="<?php echo h($href); ?>"
+              style="<?php echo $style; ?> text-decoration:none;">
+              <span class="dropdown-shortcuts-icon rounded-circle mb-2">
+                <i class="fi <?php echo h($flag); ?> fis" style="font-size:25px;"></i>
+              </span>
+
+              <div class="small" style="text-align:center; margin-top:-4px;">
+                <?php echo h($name); ?>
+                <?php if ($isCurrent): ?>
+                  <div class="small text-success">✔</div>
+                <?php endif; ?>
+              </div>
+            </a>
+<?php endforeach; ?>
+
+
             </div>
           </div>
         </div>
@@ -237,7 +238,6 @@ if ($next === '') $next = '/php-mongo-erp/public/index.php';
           </li>
         </ul>
       </li>
-      <!--/ User -->
 
     </ul>
   </div>
