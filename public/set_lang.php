@@ -1,22 +1,26 @@
 <?php
-/**
- * set_lang.php
- *
- * ?lang=tr|en ile dili değiştirir, referer’a döner
- * - session'a yazar
- * - cookie'ye yazar (tarayıcıda kalıcı olsun)
- */
-
 require_once __DIR__ . '/../core/bootstrap.php';
+require_once __DIR__ . '/../core/auth/SessionManager.php';
 require_once __DIR__ . '/../core/i18n/LanguageManager.php';
 
-$lang = $_GET['lang'] ?? 'tr';
+SessionManager::start();
 
-// 1 yıl, tüm site için
-setcookie('lang', $lang, time() + 31536000, '/');
+$lang = strtolower(trim($_GET['lang'] ?? ''));
+if ($lang !== '') {
+  LanguageManager::set($lang);
+}
 
-LanguageManager::set($lang);
+$next = trim($_GET['next'] ?? '');
+if ($next !== '' && strpos($next, '/php-mongo-erp/') === 0) {
+  header('Location: ' . $next);
+  exit;
+}
 
-$back = $_SERVER['HTTP_REFERER'] ?? '/php-mongo-erp/public/index.php';
-header('Location: ' . $back);
+$ref = $_SERVER['HTTP_REFERER'] ?? '';
+if ($ref && strpos($ref, '/php-mongo-erp/') !== false) {
+  header('Location: ' . $ref);
+  exit;
+}
+
+header('Location: /php-mongo-erp/public/index.php');
 exit;

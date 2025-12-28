@@ -1,68 +1,175 @@
 <?php
 /**
- * LANG01ERepository.php
+ * app/modules/lang/LANG01ERepository.php (FINAL)
  *
- * AMAÇ:
- * - Dil metadata (LANG01E) erişimi
- * - Default dili ve version bilgisini almak
+ * LANG01E: dil meta
+ * fields:
+ * - lang_code (unique)
+ * - name
+ * - direction (ltr|rtl)
+ * - is_active (bool)
+ * - is_default (bool)
+ * - version (int)
+ * - updated_at (UTCDateTime)
  */
 
 final class LANG01ERepository
 {
-    public static function getDefaultLangCode(): string
-    {
-        $doc = MongoManager::collection('LANG01E')->findOne(
-            ['is_default' => true, 'is_active' => true],
-            ['projection' => ['lang_code' => 1]]
-        );
+  private static function col() {
+    return MongoManager::collection('LANG01E');
+  }
 
-        if (!$doc) return 'tr';
-        $arr = (array)$doc;
+  private static function nowUtc(): MongoDB\BSON\UTCDateTime {
+    return new MongoDB\BSON\UTCDateTime((int) floor(microtime(true) * 1000));
+  }
 
-        return (string)($arr['lang_code'] ?? 'tr');
+  public static function listAll(): array {
+    $cur = self::col()->find([], ['sort' => ['lang_code' => 1]]);
+    $out = [];
+    foreach ($cur as $d) {
+      if ($d instanceof MongoDB\Model\BSONDocument) $d = $d->getArrayCopy();
+      $out[] = $d;
+    }
+    return $out;
+  }
+
+  public static function listActive(): array {
+    $cur = self::col()->find(['is_active' => true], ['sort' => ['is_default' => -1, 'lang_code' => 1]]);
+    $out = [];
+    foreach ($cur as $d) {
+      if ($d instanceof MongoDB\Model\BSONDocument) $d = $d->getArrayCopy();
+      $out[] = $d;
+    }
+    return $out;
+  }
+
+  public static function getActiveLangCodes(): array {
+    $list = self::listActive();
+    $codes = [];
+    foreach ($list as $d) {
+      $lc = strtolower(trim((string)($d['lang_code'] ?? '')));
+      if ($lc !== '') $codes[] = $lc;
+    }
+    return array_values(array_unique($codes));
+  }
+
+  public static function findByCode(string $langCode): ?array {
+    $lc = strtolower(trim($langCode));
+    if ($lc === '') return null;
+    $d = self::col()->findOne(['lang_code' => $lc]);
+    if (!$d) return null;
+    if ($d instanceof MongoDB\Model\BSONDocument) $d = $d->getArrayCopy();
+    return $d;
+  }
+
+  public static function isActive(string $langCode): bool {
+    $d = self::findByCode($langCode);
+    if (!$d) return false;
+    return (bool)($d['is_active'] ?? false);
+  }
+
+  public static function getVersion(string $langCode): int {
+    $d = self::findByCode($langCode);
+    if (!$d) return 0;
+    return (int)($d['version'] ?? 0);
+  }
+
+  public static function bumpVersion(string $langCode): int {
+    $lc = strtolower(trim($langCode));
+    if ($lc === '') return 0;
+
+    self::col()->updateOne(
+      ['lang_code' => $lc],
+      [
+        '$inc' => ['version' => 1],
+        '$set' => ['updated_at' => self::nowUtc()],
+      ],
+      ['upsert' => true]
+    );
+
+    return self::getVersion($lc);
+  }
+
+  /**
+   * Yeni dil ekleme / mevcut dili güncelleme (upsert)
+   */
+  public static function upsertLang(string $langCode, array $fields): array {
+    $lc = strtolower(trim($langCode));
+    if ($lc === '') return ['ok'=>false,'error'=>'lang_code_required'];
+
+    $name = trim((string)($fields['name'] ?? strtoupper($lc)));
+    if ($name === '') $name = strtoupper($lc);
+
+    $dir = strtolower(trim((string)($fields['direction'] ?? 'ltr')));
+    if (!in_array($dir, ['ltr','rtl'], true)) $dir = 'ltr';
+
+    $isActive  = (bool)($fields['is_active'] ?? true);
+    $isDefault = (bool)($fields['is_default'] ?? false);
+
+    // Default seçildiyse önce diğerlerini kapat
+    if ($isDefault) {
+      self::col()->updateMany([], ['$set' => ['is_default' => false, 'updated_at' => self::nowUtc()]]);
     }
 
-    public static function getVersion(string $langCode): int
-    {
-        $doc = MongoManager::collection('LANG01E')->findOne(
-            ['lang_code' => $langCode],
-            ['projection' => ['version' => 1]]
-        );
+    self::col()->updateOne(
+      ['lang_code' => $lc],
+      [
+        '$set' => [
+          'lang_code'  => $lc,
+          'name'       => $name,
+          'direction'  => $dir,
+          'is_active'  => $isActive,
+          'is_default' => $isDefault,
+          'updated_at' => self::nowUtc(),
+        ],
+        '$setOnInsert' => [
+          'version' => 1,
+        ],
+      ],
+      ['upsert' => true]
+    );
 
-        if (!$doc) return 1;
-        $arr = (array)$doc;
+    return ['ok'=>true];
+  }
 
-        return (int)($arr['version'] ?? 1);
+  /**
+   * Aktif/pasif: mevcut kayıt yoksa upsert yapma (user istemiyor)
+   */
+  public static function setActive(string $langCode, bool $isActive): array {
+    $lc = strtolower(trim($langCode));
+    if ($lc === '') return ['ok'=>false,'error'=>'lang_code_required'];
+
+    $res = self::col()->updateOne(
+      ['lang_code' => $lc],
+      ['$set' => ['is_active' => (bool)$isActive, 'updated_at' => self::nowUtc()]],
+      ['upsert' => false]
+    );
+
+    if (($res->getMatchedCount() ?? 0) < 1) {
+      return ['ok'=>false,'error'=>'lang_not_found'];
     }
 
-    public static function isActive(string $langCode): bool
-    {
-        $doc = MongoManager::collection('LANG01E')->findOne(
-            ['lang_code' => $langCode, 'is_active' => true],
-            ['projection' => ['_id' => 1]]
-        );
+    return ['ok'=>true];
+  }
 
-        return (bool)$doc;
-    }
+  public static function setDefault(string $langCode): array {
+    $lc = strtolower(trim($langCode));
+    if ($lc === '') return ['ok'=>false,'error'=>'lang_code_required'];
 
-    public static function bumpVersion(string $langCode): void
-    {
-        MongoManager::collection('LANG01E')->updateOne(
-            ['lang_code' => $langCode],
-            ['$inc' => ['version' => 1], '$set' => ['updated_at' => new \MongoDB\BSON\UTCDateTime()]]
-        );
-    }
+    // kayıt var mı?
+    $d = self::findByCode($lc);
+    if (!$d) return ['ok'=>false,'error'=>'lang_not_found'];
 
-    public static function listActiveLangs(): array
-    {
-        $cursor = MongoManager::collection('LANG01E')->find(
-            ['is_active' => true],
-            ['projection' => ['lang_code' => 1, 'name' => 1, 'is_default' => 1], 'sort' => ['lang_code' => 1]]
-        );
+    self::col()->updateMany([], ['$set' => ['is_default' => false, 'updated_at' => self::nowUtc()]]);
+    self::col()->updateOne(['lang_code' => $lc], ['$set' => ['is_default' => true, 'updated_at' => self::nowUtc()]]);
 
-        $out = [];
-        foreach ($cursor as $d) $out[] = (array)$d;
-        return $out;
-    }
+    return ['ok'=>true];
+  }
 
+  public static function getDefaultLang(): string {
+    $d = self::col()->findOne(['is_default' => true]);
+    if ($d && $d instanceof MongoDB\Model\BSONDocument) $d = $d->getArrayCopy();
+    $lc = strtolower(trim((string)($d['lang_code'] ?? '')));
+    return $lc !== '' ? $lc : 'tr';
+  }
 }

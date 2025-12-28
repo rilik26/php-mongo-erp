@@ -1,136 +1,156 @@
 <?php
 /**
- * LanguageManager.php
+ * core/i18n/LanguageManager.php (FINAL)
  *
- * AMAÇ:
- * - Aktif dili session üzerinden yönetmek
- * - LANG01E.version ile session cache invalidation yapmak
- * - __() helper ile çeviri döndürmek
+ * - boot(): aktif dilleri yükler
+ * - get(): current lang
+ * - set(): session'a yazar
+ * - getActiveLangs(): LANG01E aktif listesi (meta ile)
+ * - t(): çeviri (LANG01T)
  *
- * NOT:
- * - Firma override YOK (global)
+ * Basit cache: request içinde static array.
  */
 
-require_once __DIR__ . '/../auth/SessionManager.php';
 require_once __DIR__ . '/../../app/modules/lang/LANG01ERepository.php';
 require_once __DIR__ . '/../../app/modules/lang/LANG01TRepository.php';
 
 final class LanguageManager
 {
-    private static string $current = 'tr';
-    private static int $version = 1;
+  private static bool $booted = false;
+  private static string $current = 'tr';
+  private static array $activeMeta = []; // list of LANG01E docs
+  private static array $dictCache = [];  // ['tr' => ['key'=>'text', ...], ...]
 
-    // request içi hızlı cache
-    private static array $dict = [];
+  public static function boot(): void
+  {
+    if (self::$booted) return;
 
-    private static function cacheKey(string $langCode, int $version): string
-    {
-        return '__i18n_dict__' . $langCode . '__v' . $version;
+    try {
+      self::$activeMeta = LANG01ERepository::listActive();
+      $default = LANG01ERepository::getDefaultLang();
+    } catch (Throwable $e) {
+      self::$activeMeta = [
+        ['lang_code'=>'tr','name'=>'Türkçe','direction'=>'ltr','is_default'=>true,'is_active'=>true],
+        ['lang_code'=>'en','name'=>'English','direction'=>'ltr','is_default'=>false,'is_active'=>true],
+      ];
+      $default = 'tr';
     }
 
-    public static function boot(): void
-    {
-        SessionManager::start();
+    $sessLang = '';
+    try { $sessLang = (string)($_SESSION['lang'] ?? ''); } catch (Throwable $e) { $sessLang=''; }
+    $sessLang = strtolower(trim($sessLang));
 
-        // 0) cookie dili (tarayıcı tercihidir)
-        $cookieLang = $_COOKIE['lang'] ?? null;
+    $activeCodes = [];
+    foreach (self::$activeMeta as $d) {
+      $lc = strtolower(trim((string)($d['lang_code'] ?? '')));
+      if ($lc !== '') $activeCodes[] = $lc;
+    }
+    $activeCodes = array_values(array_unique($activeCodes));
 
-        // 1) session dili
-        $sessionLang = $_SESSION['lang'] ?? null;
+    if ($sessLang !== '' && in_array($sessLang, $activeCodes, true)) {
+      self::$current = $sessLang;
+    } else {
+      self::$current = $default ?: 'tr';
+      $_SESSION['lang'] = self::$current;
+    }
 
-        // cookie varsa session'a bas (tek kaynak olsun)
-        if ($cookieLang) {
-            $_SESSION['lang'] = $cookieLang;
-            $lang = $cookieLang;
+    self::$booted = true;
+  }
+
+  public static function get(): string
+  {
+    if (!self::$booted) self::boot();
+    return self::$current;
+  }
+
+  public static function set(string $lang): void
+  {
+    if (!self::$booted) self::boot();
+
+    $lc = strtolower(trim($lang));
+    if ($lc === '') return;
+
+    // sadece aktif dillere izin ver
+    $activeCodes = array_map(fn($x)=>strtolower(trim((string)($x['lang_code'] ?? ''))), self::$activeMeta);
+    $activeCodes = array_values(array_filter($activeCodes));
+
+    if (!in_array($lc, $activeCodes, true)) return;
+
+    self::$current = $lc;
+    $_SESSION['lang'] = $lc;
+  }
+
+  /**
+   * Aktif diller meta listesi döner (header2.php için ideal)
+   */
+  public static function getActiveLangs(): array
+  {
+    if (!self::$booted) self::boot();
+    return self::$activeMeta;
+  }
+
+  private static function loadDict(string $lang): array
+  {
+    $lc = strtolower(trim($lang));
+    if ($lc === '') $lc = 'tr';
+
+    if (isset(self::$dictCache[$lc]) && is_array(self::$dictCache[$lc])) {
+      return self::$dictCache[$lc];
+    }
+
+    // LANG01TRepository::dumpAll($lc) zaten key=>['text'=>..] gibi dönüyordu sende
+    $dict = [];
+    try {
+      $rows = LANG01TRepository::dumpAll($lc);
+      foreach ($rows as $k => $r) {
+        if (is_array($r)) {
+          $dict[(string)$k] = (string)($r['text'] ?? '');
         } else {
-            $lang = $sessionLang;
+          $dict[(string)$k] = (string)$r;
         }
-
-        // 2) default dil (db)
-        if (!$lang) {
-            $lang = LANG01ERepository::getDefaultLangCode();
-            $_SESSION['lang'] = $lang;
-            setcookie('lang', $lang, time() + 31536000, '/');
-        }
-
-        // 3) aktif mi? değilse default’a düş
-        if (!LANG01ERepository::isActive($lang)) {
-            $lang = LANG01ERepository::getDefaultLangCode();
-            $_SESSION['lang'] = $lang;
-            setcookie('lang', $lang, time() + 31536000, '/');
-        }
-
-        self::$current = $lang;
-        self::$version = LANG01ERepository::getVersion($lang);
-
-        // session cache var mı?
-        $ck = self::cacheKey($lang, self::$version);
-        if (isset($_SESSION[$ck]) && is_array($_SESSION[$ck])) {
-            self::$dict = $_SESSION[$ck];
-            return;
-        }
-
-        // yoksa DB’den yükle
-        $dict = LANG01TRepository::loadDictionary($lang);
-
-        self::$dict = $dict;
-        $_SESSION[$ck] = $dict;
+      }
+    } catch (Throwable $e) {
+      $dict = [];
     }
 
-    public static function set(string $langCode): void
-    {
-        SessionManager::start();
+    self::$dictCache[$lc] = $dict;
+    return $dict;
+  }
 
-        // Dil pasifse kabul etme -> default’a düş
-        if (!LANG01ERepository::isActive($langCode)) {
-            $langCode = LANG01ERepository::getDefaultLangCode();
-        }
+  /**
+   * translate
+   */
+  public static function t(string $key, array $params = []): string
+  {
+    if (!self::$booted) self::boot();
 
-        $_SESSION['lang'] = $langCode;
+    $k = trim($key);
+    if ($k === '') return '';
 
-        // yeniden boot (version + dict)
-        self::$dict = [];
-        self::boot();
+    $lc = self::$current ?: 'tr';
+    $dict = self::loadDict($lc);
+    $txt = $dict[$k] ?? '';
+
+    // fallback: default lang'a bak
+    if ($txt === '') {
+      try {
+        $def = LANG01ERepository::getDefaultLang();
+      } catch (Throwable $e) { $def = 'tr'; }
+      if ($def && $def !== $lc) {
+        $d2 = self::loadDict($def);
+        $txt = $d2[$k] ?? '';
+      }
     }
 
-    public static function get(): string
-    {
-        return self::$current;
+    if ($txt === '') $txt = $k;
+
+    // params replace: {name}
+    if (!empty($params)) {
+      foreach ($params as $pk => $pv) {
+        $txt = str_replace('{' . $pk . '}', (string)$pv, $txt);
+      }
     }
 
-    public static function t(string $key, array $replace = []): string
-    {
-        if (empty(self::$dict)) {
-            self::boot();
-        }
-
-        $text = self::$dict[$key] ?? null;
-
-        // fallback: default dil
-        if ($text === null || $text === '') {
-            $default = LANG01ERepository::getDefaultLangCode();
-            if ($default !== self::$current) {
-                $v2 = LANG01ERepository::getVersion($default);
-                $ck2 = self::cacheKey($default, $v2);
-
-                $dict2 = $_SESSION[$ck2] ?? null;
-                if (!is_array($dict2)) {
-                    $dict2 = LANG01TRepository::loadDictionary($default);
-                    $_SESSION[$ck2] = $dict2;
-                }
-
-                $text = $dict2[$key] ?? null;
-            }
-        }
-
-        if ($text === null || $text === '') {
-            $text = $key; // en son fallback
-        }
-
-        foreach ($replace as $k => $v) {
-            $text = str_replace(':' . $k, (string)$v, $text);
-        }
-
-        return $text;
-    }
+    return $txt;
+  }
 }
