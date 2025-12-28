@@ -2,12 +2,13 @@
 /**
  * public/timeline.php (FINAL)
  *
- * Timeline (UI)
  * - Event listesi kart UI
  * - TR tarih/saat formatı
- * - Filtreler
- * - LOG / SNAPSHOT / DIFF (HTML view)
- * - GENDOC kartlarında doc_no/title/status otomatik görünür
+ * - Filtre: event_code / username / module / doc_type / doc_id
+ * - Butonlar: LOG / SNAPSHOT / DIFF
+ *
+ * ✅ GENDOC kartlarında doc_no/title/status otomatik dolsun:
+ *    target -> summary -> snapshot.target fallback
  */
 
 require_once __DIR__ . '/../core/bootstrap.php';
@@ -19,20 +20,23 @@ require_once __DIR__ . '/../core/action/ActionLogger.php';
 SessionManager::start();
 
 if (!isset($_SESSION['context']) || !is_array($_SESSION['context'])) {
-    header('Location: /php-mongo-erp/public/login.php');
-    exit;
+  header('Location: /php-mongo-erp/public/login.php');
+  exit;
 }
 
 try {
-    Context::bootFromSession();
+  Context::bootFromSession();
 } catch (ContextException $e) {
-    header('Location: /php-mongo-erp/public/login.php');
-    exit;
+  header('Location: /php-mongo-erp/public/login.php');
+  exit;
 }
 
 $ctx = Context::get();
 
-ActionLogger::info('TIMELINE.VIEW', ['source' => 'public/timeline.php'], $ctx);
+// View log
+ActionLogger::info('TIMELINE.VIEW', [
+  'source' => 'public/timeline.php'
+], $ctx);
 
 // ---- Filters ----
 $eventCode = trim($_GET['event'] ?? '');
@@ -50,15 +54,16 @@ $cdef     = $ctx['CDEF01_id'] ?? null;
 $period   = $ctx['period_id'] ?? null;
 $facility = $ctx['facility_id'] ?? null;
 
+// Filter build
 $filter = [];
 if ($cdef) $filter['context.CDEF01_id'] = $cdef;
 
-// Period: current + GLOBAL
+// Period: current + GLOBAL göster
 if ($period) {
-    $filter['$or'] = [
-        ['context.period_id' => $period],
-        ['context.period_id' => 'GLOBAL'],
-    ];
+  $filter['$or'] = [
+    ['context.period_id' => $period],
+    ['context.period_id' => 'GLOBAL'],
+  ];
 }
 
 if ($username !== '') $filter['context.username'] = $username;
@@ -69,66 +74,144 @@ if ($docType !== '') $filter['target.doc_type'] = $docType;
 if ($docId !== '') $filter['target.doc_id'] = $docId;
 
 $cur = MongoManager::collection('EVENT01E')->find(
-    $filter,
-    [
-        'sort'  => ['created_at' => -1],
-        'limit' => $limit,
-        'projection' => [
-            'event_code' => 1,
-            'created_at' => 1,
-            'context.username' => 1,
-            'context.UDEF01_id' => 1,
-            'target' => 1,
-            'refs' => 1,
-            'data' => 1,
-        ]
+  $filter,
+  [
+    'sort'  => ['created_at' => -1],
+    'limit' => $limit,
+    'projection' => [
+      'event_code' => 1,
+      'created_at' => 1,
+      'context.username' => 1,
+      'context.UDEF01_id' => 1,
+      'target' => 1,
+      'refs' => 1,
+      'data' => 1,
     ]
+  ]
 );
 
 $events = iterator_to_array($cur);
 
 function esc($s): string {
-    return htmlspecialchars((string)$s, ENT_QUOTES, 'UTF-8');
+  return htmlspecialchars((string)$s, ENT_QUOTES, 'UTF-8');
 }
 
 function fmt_tr($iso): string {
-    if (!$iso) return '-';
-    try {
-        $dt = new DateTime($iso);
-        // Server UTC geliyor; PHP default timezone ayarlıysa burada TR’ye göre formatlanır.
-        return $dt->format('d.m.Y H:i:s');
-    } catch (Throwable $e) {
-        return (string)$iso;
-    }
+  if (!$iso) return '-';
+  try {
+    $dt = new DateTime((string)$iso);
+    $dt->setTimezone(new DateTimeZone('Europe/Istanbul'));
+    return $dt->format('d.m.Y H:i:s');
+  } catch (Throwable $e) {
+    return (string)$iso;
+  }
 }
 
 function bson2arr($v) {
-    if ($v instanceof MongoDB\Model\BSONDocument || $v instanceof MongoDB\Model\BSONArray) {
-        $v = $v->getArrayCopy();
-    }
-    if (is_array($v)) {
-        $out = [];
-        foreach ($v as $k => $vv) $out[$k] = bson2arr($vv);
-        return $out;
-    }
-    if ($v instanceof MongoDB\BSON\UTCDateTime) return $v->toDateTime()->format('c');
-    if ($v instanceof MongoDB\BSON\ObjectId) return (string)$v;
-    return $v;
+  if ($v instanceof MongoDB\Model\BSONDocument || $v instanceof MongoDB\Model\BSONArray) {
+    $v = $v->getArrayCopy();
+  }
+  if (is_array($v)) {
+    $out = [];
+    foreach ($v as $k => $vv) $out[$k] = bson2arr($vv);
+    return $out;
+  }
+  if ($v instanceof MongoDB\BSON\UTCDateTime) return $v->toDateTime()->format('c');
+  if ($v instanceof MongoDB\BSON\ObjectId) return (string)$v;
+  return $v;
 }
 
 $events = array_map('bson2arr', $events);
 
 function event_title(string $code): string {
-    $map = [
-        'I18N.ADMIN.SAVE'   => 'Dil Yönetimi: Kaydet',
-        'I18N.ADMIN.VIEW'   => 'Dil Yönetimi: Görüntüle',
-        'AUDIT.VIEW'        => 'Audit View: Görüntüle',
-        'TIMELINE.VIEW'     => 'Timeline: Görüntüle',
-        'GENDOC.ADMIN.VIEW' => 'Genel Evrak: Görüntüle',
-        'GENDOC.ADMIN.SAVE' => 'Genel Evrak: Kaydet',
-    ];
-    return $map[$code] ?? $code;
+  $map = [
+    'I18N.ADMIN.SAVE'  => 'Dil Yönetimi: Kaydet',
+    'I18N.ADMIN.VIEW'  => 'Dil Yönetimi: Görüntüle',
+    'AUDIT.VIEW'       => 'Audit View: Görüntüle',
+    'TIMELINE.VIEW'    => 'Timeline: Görüntüle',
+
+    'GENDOC.ADMIN.VIEW' => 'GENDOC: Görüntüle',
+    'GENDOC.ADMIN.SAVE' => 'GENDOC: Kaydet',
+    'GENDOC.SAVE'       => 'GENDOC: Kaydet',
+  ];
+  return $map[$code] ?? $code;
 }
+
+/**
+ * ✅ snapshot'tan target meta çek (cache'li)
+ */
+$snapMetaCache = []; // snapshot_id => ['doc_no'=>..,'doc_title'=>..,'status'=>..,'version'=>..]
+function snapshot_target_meta(?string $snapshotId) {
+  global $snapMetaCache;
+
+  $snapshotId = (string)($snapshotId ?? '');
+  if ($snapshotId === '') return null;
+  if (array_key_exists($snapshotId, $snapMetaCache)) return $snapMetaCache[$snapshotId];
+
+  try {
+    $oid = new MongoDB\BSON\ObjectId($snapshotId);
+  } catch (Throwable $e) {
+    $snapMetaCache[$snapshotId] = null;
+    return null;
+  }
+
+  $doc = MongoManager::collection('SNAP01E')->findOne(
+    ['_id' => $oid],
+    ['projection' => ['target.doc_no'=>1,'target.doc_title'=>1,'target.status'=>1,'version'=>1]]
+  );
+  if (!$doc) {
+    $snapMetaCache[$snapshotId] = null;
+    return null;
+  }
+  if ($doc instanceof MongoDB\Model\BSONDocument) $doc = $doc->getArrayCopy();
+  $doc = bson2arr($doc);
+
+  $t = (array)($doc['target'] ?? []);
+  $out = [
+    'doc_no'    => (string)($t['doc_no'] ?? ''),
+    'doc_title' => (string)($t['doc_title'] ?? ''),
+    'status'    => (string)($t['status'] ?? ''),
+    'version'   => (string)($doc['version'] ?? ''),
+  ];
+
+  $snapMetaCache[$snapshotId] = $out;
+  return $out;
+}
+
+/**
+ * ✅ event için doc meta çöz (target -> summary -> snapshot.target)
+ */
+function resolve_doc_meta(array $ev): array
+{
+  $target = (array)($ev['target'] ?? []);
+  $refs   = (array)($ev['refs'] ?? []);
+  $data   = (array)($ev['data'] ?? []);
+  $sum    = $data['summary'] ?? null;
+
+  $docNo   = (string)($target['doc_no'] ?? '');
+  $docTitle= (string)($target['doc_title'] ?? '');
+  $status  = (string)($target['status'] ?? '');
+
+  // summary fallback
+  if (($docNo === '' || $docTitle === '' || $status === '') && is_array($sum)) {
+    if ($docNo === '')    $docNo    = (string)($sum['doc_no'] ?? '');
+    if ($docTitle === '') $docTitle = (string)($sum['title'] ?? '');
+    if ($status === '')   $status   = (string)($sum['status'] ?? '');
+  }
+
+  // snapshot fallback
+  if (($docNo === '' || $docTitle === '' || $status === '') && !empty($refs['snapshot_id'])) {
+    $m = snapshot_target_meta((string)$refs['snapshot_id']);
+    if (is_array($m)) {
+      if ($docNo === '')    $docNo    = (string)($m['doc_no'] ?? '');
+      if ($docTitle === '') $docTitle = (string)($m['doc_title'] ?? '');
+      if ($status === '')   $status   = (string)($m['status'] ?? '');
+    }
+  }
+
+  return [$docNo, $docTitle, $status];
+}
+
 ?>
 <!doctype html>
 <html>
@@ -149,6 +232,7 @@ function event_title(string $code): string {
     }
     body{ margin:0; background:var(--bg); color:var(--text); font-family: Arial, sans-serif; }
     .wrap{ max-width:1200px; margin:0 auto; padding:18px; }
+
     h1{ margin:0 0 12px; font-size:34px; letter-spacing:.2px; }
     .sub{ color:var(--muted); font-size:13px; margin-bottom:10px; }
 
@@ -192,17 +276,23 @@ function event_title(string $code): string {
       justify-content:center;
       white-space:nowrap;
     }
-    .btn-primary{ background:var(--primary); border-color: transparent; color:#fff; }
+    .btn-primary{
+      background:var(--primary);
+      border-color: transparent;
+      color:#fff;
+    }
     .btn:hover{ filter: brightness(1.05); }
     .btn:active{ transform: translateY(1px); }
 
     .cards{ display:flex; flex-direction:column; gap:12px; margin-top:12px; }
+
     .card{
       background:var(--panel2);
       border:1px solid var(--border);
       border-radius:16px;
       padding:14px 14px 12px;
     }
+
     .row1{
       display:flex;
       gap:10px;
@@ -211,6 +301,7 @@ function event_title(string $code): string {
       flex-wrap:wrap;
       margin-bottom:8px;
     }
+
     .title{
       font-size:16px;
       font-weight:bold;
@@ -219,6 +310,7 @@ function event_title(string $code): string {
       align-items:center;
       flex-wrap:wrap;
     }
+
     .code{
       font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
       background:rgba(0,0,0,.22);
@@ -228,6 +320,7 @@ function event_title(string $code): string {
       color:rgba(231,234,243,.95);
       font-size:12px;
     }
+
     .meta{
       color:var(--muted);
       font-size:13px;
@@ -236,6 +329,7 @@ function event_title(string $code): string {
       align-items:center;
       flex-wrap:wrap;
     }
+
     .chips{ display:flex; gap:8px; flex-wrap:wrap; margin-top:8px; }
     .chip{
       background:var(--chip);
@@ -245,6 +339,7 @@ function event_title(string $code): string {
       font-size:12px;
       color:rgba(231,234,243,.95);
     }
+
     .grid2{
       display:grid;
       grid-template-columns: 1fr 1fr;
@@ -252,6 +347,7 @@ function event_title(string $code): string {
       margin-top:10px;
     }
     @media (max-width: 980px){ .grid2{ grid-template-columns: 1fr; } }
+
     .box{
       background:rgba(0,0,0,.14);
       border:1px solid var(--border);
@@ -262,6 +358,7 @@ function event_title(string $code): string {
     .box h4{ margin:0 0 8px; font-size:13px; color:rgba(231,234,243,.9); }
     .kv{ font-size:12px; color:var(--muted); line-height:1.55; }
     .kv b{ color:rgba(231,234,243,.95); font-weight:600; }
+
     .actions{
       display:flex;
       gap:8px;
@@ -284,9 +381,9 @@ function event_title(string $code): string {
   <form method="GET" class="bar">
     <input class="in" name="event"    value="<?php echo esc($eventCode); ?>" placeholder="event_code (örn: GENDOC.ADMIN.SAVE)">
     <input class="in" name="user"     value="<?php echo esc($username); ?>"  placeholder="username (örn: admin)">
-    <input class="in" name="module"   value="<?php echo esc($module); ?>"    placeholder="module (örn: gendoc)">
-    <input class="in" name="doc_type" value="<?php echo esc($docType); ?>"   placeholder="doc_type (örn: GENDOC01E)">
-    <input class="in" name="doc_id"   value="<?php echo esc($docId); ?>"     placeholder="doc_id">
+    <input class="in" name="module"   value="<?php echo esc($module); ?>"    placeholder="module (örn: gen)">
+    <input class="in" name="doc_type" value="<?php echo esc($docType); ?>"   placeholder="doc_type (örn: GENDOC01T)">
+    <input class="in" name="doc_id"   value="<?php echo esc($docId); ?>"     placeholder="doc_id (örn: DOC-001)">
     <button class="btn btn-primary" type="submit">Getir</button>
     <a class="btn" href="/php-mongo-erp/public/timeline.php">Sıfırla</a>
     <input type="hidden" name="limit" value="<?php echo (int)$limit; ?>">
@@ -294,7 +391,9 @@ function event_title(string $code): string {
 
   <div class="cards">
     <?php if (empty($events)): ?>
-      <div class="card"><div class="meta">Kayıt bulunamadı.</div></div>
+      <div class="card">
+        <div class="meta">Kayıt bulunamadı.</div>
+      </div>
     <?php endif; ?>
 
     <?php foreach ($events as $ev):
@@ -302,9 +401,9 @@ function event_title(string $code): string {
       $tIso = (string)($ev['created_at'] ?? '');
       $tTr  = fmt_tr($tIso);
       $user = (string)($ev['context']['username'] ?? '');
-      $target = $ev['target'] ?? [];
-      $refs   = $ev['refs'] ?? [];
-      $data   = $ev['data'] ?? [];
+      $target = (array)($ev['target'] ?? []);
+      $refs   = (array)($ev['refs'] ?? []);
+      $data   = (array)($ev['data'] ?? []);
 
       $sum = $data['summary'] ?? null;
 
@@ -312,32 +411,22 @@ function event_title(string $code): string {
       $snapId = $refs['snapshot_id'] ?? null;
       $prevId = $refs['prev_snapshot_id'] ?? null;
 
-      $tMod = $target['module'] ?? '-';
-      $tDt  = $target['doc_type'] ?? '-';
-      $tDi  = $target['doc_id'] ?? '-';
+      $tMod = (string)($target['module'] ?? '-');
+      $tDt  = (string)($target['doc_type'] ?? '-');
+      $tDi  = (string)($target['doc_id'] ?? '-');
 
-      // ✅ GENDOC otomatik alanlar
-      $autoDocNo = is_array($sum) ? (string)($sum['doc_no'] ?? '') : '';
-      $autoTitle = is_array($sum) ? (string)($sum['title'] ?? '') : '';
-      $autoStatus= is_array($sum) ? (string)($sum['status'] ?? '') : '';
+      // ✅ doc meta auto-fill (target -> summary -> snapshot.target)
+      [$docNoAuto, $titleAuto, $statusAuto] = resolve_doc_meta($ev);
 
-      // target’ta doc_no varsa onu tercih et
-      $tDocNo = (string)($target['doc_no'] ?? '');
-      if ($tDocNo === '' && $autoDocNo !== '') $tDocNo = $autoDocNo;
+      // summary chips (version vs)
+      $sumVersion = (is_array($sum) ? (string)($sum['version'] ?? '') : '');
     ?>
       <div class="card">
         <div class="row1">
           <div class="title">
             <?php echo esc(event_title($code)); ?>
             <span class="code"><?php echo esc($code); ?></span>
-
-            <?php if (strpos($code, 'GENDOC.') === 0 && ($tDocNo !== '' || $autoTitle !== '' || $autoStatus !== '')): ?>
-              <span class="code"><?php echo esc($tDocNo !== '' ? $tDocNo : ''); ?></span>
-              <?php if ($autoStatus !== ''): ?><span class="code"><?php echo esc($autoStatus); ?></span><?php endif; ?>
-              <?php if ($autoTitle !== ''): ?><span class="code"><?php echo esc($autoTitle); ?></span><?php endif; ?>
-            <?php endif; ?>
           </div>
-
           <div class="meta">
             <span><?php echo esc($tTr); ?></span>
             <span>—</span>
@@ -350,10 +439,17 @@ function event_title(string $code): string {
           <span class="chip">doc_type: <b><?php echo esc($tDt); ?></b></span>
           <span class="chip">doc_id: <b><?php echo esc($tDi); ?></b></span>
 
-          <?php if (strpos($code, 'GENDOC.') === 0): ?>
-            <?php if ($tDocNo !== ''): ?><span class="chip">doc_no: <b><?php echo esc($tDocNo); ?></b></span><?php endif; ?>
-            <?php if ($autoStatus !== ''): ?><span class="chip">status: <b><?php echo esc($autoStatus); ?></b></span><?php endif; ?>
-            <?php if ($autoTitle !== ''): ?><span class="chip">title: <b><?php echo esc($autoTitle); ?></b></span><?php endif; ?>
+          <?php if ($docNoAuto !== ''): ?>
+            <span class="chip">doc_no: <b><?php echo esc($docNoAuto); ?></b></span>
+          <?php endif; ?>
+          <?php if ($titleAuto !== ''): ?>
+            <span class="chip">title: <b><?php echo esc($titleAuto); ?></b></span>
+          <?php endif; ?>
+          <?php if ($statusAuto !== ''): ?>
+            <span class="chip">status: <b><?php echo esc($statusAuto); ?></b></span>
+          <?php endif; ?>
+          <?php if ($sumVersion !== ''): ?>
+            <span class="chip">version: <b><?php echo esc($sumVersion); ?></b></span>
           <?php endif; ?>
         </div>
 

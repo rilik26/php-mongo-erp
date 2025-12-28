@@ -2,16 +2,13 @@
 /**
  * public/gendoc_admin.php (FINAL)
  *
- * Basit GENDOC admin ekranı:
  * - Header: doc_no, title, status
  * - Body: json textarea
+ * - ✅ Versiyon seçme: ?v= (dropdown)
+ * - Kaydet: HEADER update/insert (duplicate key E11000 fix) + BODY new version + snapshot + event + log
  *
- * Kaydet:
- *  - Header upsert (GENDOC01E)
- *  - Body version insert (GENDOC01T V1→V2→V3)
- *  - Snapshot (FINAL STATE)
- *  - Event + Log
- *  - Lock auto acquire/release (editing)
+ * ✅ LOCK VAR (LOCK01E)
+ * ✅ AMA Body dahil hiçbir alan KİLİTLENMEZ / disable edilmez (sadece bilgi amaçlı gösterim)
  */
 
 require_once __DIR__ . '/../core/bootstrap.php';
@@ -44,18 +41,36 @@ try {
 
 $ctx = Context::get();
 
-// Permission (admin geçer, diğerleri require_perm)
+// Permission
 $isAdmin = (($ctx['role'] ?? '') === 'admin');
 if (function_exists('require_perm') && !$isAdmin) {
-  require_perm('gendoc.manage'); // 403 olabilir => normal
+  require_perm('gendoc.manage');
 }
 
 function h($s): string { return htmlspecialchars((string)$s, ENT_QUOTES, 'UTF-8'); }
+
+function bson_to_array($v) {
+  if ($v instanceof MongoDB\Model\BSONDocument || $v instanceof MongoDB\Model\BSONArray) {
+    $v = $v->getArrayCopy();
+  }
+  if ($v instanceof MongoDB\BSON\UTCDateTime) return $v->toDateTime()->format('c');
+  if ($v instanceof MongoDB\BSON\ObjectId) return (string)$v;
+  if (is_array($v)) {
+    $out = [];
+    foreach ($v as $k => $vv) $out[$k] = bson_to_array($vv);
+    return $out;
+  }
+  return $v;
+}
 
 // input target
 $module  = trim($_GET['module'] ?? 'gen');
 $docType = trim($_GET['doc_type'] ?? 'GENDOC01T');
 $docId   = trim($_GET['doc_id'] ?? 'DOC-001');
+
+// ✅ version select param (0/empty => latest)
+$selectedV = (int)($_GET['v'] ?? 0);
+if ($selectedV < 0) $selectedV = 0;
 
 if ($module === '' || $docType === '' || $docId === '') {
   http_response_code(400);
@@ -63,15 +78,14 @@ if ($module === '' || $docType === '' || $docId === '') {
   exit;
 }
 
-$msg = null;
 $err = null;
 
 // view log + event
 $viewLogId = ActionLogger::info('GENDOC.ADMIN.VIEW', [
-  'source' => 'public/gendoc_admin.php',
-  'module' => $module,
+  'source'   => 'public/gendoc_admin.php',
+  'module'   => $module,
   'doc_type' => $docType,
-  'doc_id' => $docId
+  'doc_id'   => $docId
 ], $ctx);
 
 EventWriter::emit(
@@ -88,32 +102,119 @@ $target = [
   'doc_id'   => $docId,
 ];
 
-$headerDoc = GENDOC01ERepository::findByTarget($target, $ctx);
+// ---- header load (robust) ----
+$headerDoc = null;
+try {
+  $headerDoc = GENDOC01ERepository::findByTarget($target, $ctx);
+} catch (Throwable $e) {
+  $headerDoc = null;
+}
+
+$targetKey = '';
+try { $targetKey = GENDOC01ERepository::buildTargetKey($target, $ctx); }
+catch(Throwable $e) { $targetKey = ''; }
+
+if (!$headerDoc && $targetKey) {
+  try {
+    $tmp = MongoManager::collection('GENDOC01E')->findOne(['target_key' => $targetKey]);
+    if ($tmp) $headerDoc = bson_to_array($tmp);
+  } catch(Throwable $e) {}
+}
+
+if (!$headerDoc) {
+  try {
+    $f = [
+      'target.module'   => $module,
+      'target.doc_type' => $docType,
+      'target.doc_id'   => $docId,
+    ];
+    $tmp = MongoManager::collection('GENDOC01E')->findOne($f, ['sort'=>['updated_at'=>-1, '_id'=>-1]]);
+    if ($tmp) $headerDoc = bson_to_array($tmp);
+  } catch(Throwable $e) {}
+}
+
 $header = [];
 if ($headerDoc) {
   $hdoc = $headerDoc['header'] ?? [];
-  if ($hdoc instanceof MongoDB\Model\BSONDocument) $hdoc = $hdoc->getArrayCopy();
-  $header = is_array($hdoc) ? $hdoc : [];
+  $header = is_array($hdoc) ? $hdoc : bson_to_array($hdoc);
+  if (!is_array($header)) $header = [];
 }
 
 $docNo  = (string)($header['doc_no'] ?? '');
 $title  = (string)($header['title'] ?? '');
 $status = (string)($header['status'] ?? 'draft');
+if ($status === '') $status = 'draft';
 
-$targetKey = '';
-try {
-  $targetKey = GENDOC01ERepository::buildTargetKey($target, $ctx);
-} catch(Throwable $e) {}
-
-$latestBody = $targetKey ? GENDOC01TRepository::latestByTargetKey($targetKey) : null;
-$bodyLatest = null;
-if ($latestBody) {
-  $b = $latestBody['body'] ?? null;
-  if ($b instanceof MongoDB\Model\BSONDocument) $b = $b->getArrayCopy();
-  $bodyLatest = is_array($b) ? $b : null;
+if (!$targetKey && $headerDoc && !empty($headerDoc['target_key'])) {
+  $targetKey = (string)$headerDoc['target_key'];
 }
-$bodyJson = $bodyLatest ? json_encode($bodyLatest, JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES|JSON_PRETTY_PRINT) : "{}";
 
+// ---- versions list + load body ----
+$versions = [];          // [1,2,3...]
+$latestVersion = 0;      // max
+$loadedVersion = 0;      // currently loaded
+$bodyLatest = null;
+
+if ($targetKey) {
+  // versions list
+  try {
+    $curV = MongoManager::collection('GENDOC01T')->find(
+      ['target_key' => $targetKey],
+      ['projection' => ['version'=>1], 'sort'=>['version'=>-1], 'limit'=>500]
+    );
+    $tmp = iterator_to_array($curV);
+    foreach ($tmp as $d) {
+      $d = bson_to_array($d);
+      $v = (int)($d['version'] ?? 0);
+      if ($v > 0) $versions[] = $v;
+    }
+    $versions = array_values(array_unique($versions));
+    rsort($versions);
+    $latestVersion = !empty($versions) ? (int)$versions[0] : 0;
+  } catch(Throwable $e) {
+    $versions = [];
+    $latestVersion = 0;
+  }
+
+  // which version to load?
+  $wantV = $selectedV > 0 ? $selectedV : $latestVersion;
+
+  try {
+    $q = ['target_key' => $targetKey];
+    $opt = ['sort' => ['version' => -1], 'projection' => ['body'=>1,'version'=>1]];
+    if ($wantV > 0) {
+      $q['version'] = $wantV;
+      unset($opt['sort']);
+    }
+
+    $bodyDoc = MongoManager::collection('GENDOC01T')->findOne($q, $opt);
+    if ($bodyDoc) {
+      $bodyDoc = bson_to_array($bodyDoc);
+      $loadedVersion = (int)($bodyDoc['version'] ?? 0);
+      $b = bson_to_array($bodyDoc['body'] ?? null);
+      $bodyLatest = is_array($b) ? $b : null;
+    } else {
+      // fallback: latest
+      $bodyDoc = MongoManager::collection('GENDOC01T')->findOne(
+        ['target_key' => $targetKey],
+        ['sort'=>['version'=>-1], 'projection'=>['body'=>1,'version'=>1]]
+      );
+      if ($bodyDoc) {
+        $bodyDoc = bson_to_array($bodyDoc);
+        $loadedVersion = (int)($bodyDoc['version'] ?? 0);
+        $b = bson_to_array($bodyDoc['body'] ?? null);
+        $bodyLatest = is_array($b) ? $b : null;
+      }
+    }
+  } catch(Throwable $e) {}
+}
+
+// default example body
+$bodyJson = $bodyLatest
+  ? json_encode($bodyLatest, JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES|JSON_PRETTY_PRINT)
+  : "{\n  \"doc\": {\n    \"customer\": \"\",\n    \"lines\": [\n      {\"code\":\"A-001\",\"qty\":1,\"price\":100}\n    ]\n  },\n  \"note\": \"demo body\"\n}";
+
+// ---- POST Save ----
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
   $docNo  = trim($_POST['doc_no'] ?? '');
   $title  = trim($_POST['title'] ?? '');
@@ -127,32 +228,69 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $err = "Body JSON geçersiz.";
   } else {
     try {
-      // 1) HEADER upsert
+      $now = new MongoDB\BSON\UTCDateTime((int)(microtime(true) * 1000));
+
+      // target_key garanti
+      $targetKey = GENDOC01ERepository::buildTargetKey($target, $ctx);
+      if ($targetKey === '') throw new RuntimeException('target_key missing');
+
+      // HEADER update/insert (E11000 fix)
+      $existing = MongoManager::collection('GENDOC01E')->findOne(['target_key' => $targetKey], ['projection'=>['_id'=>1]]);
+      $existingArr = $existing ? bson_to_array($existing) : null;
+
       $header = [
         'doc_no' => $docNo,
         'title'  => $title,
         'status' => $status,
       ];
 
-      $hdr = GENDOC01ERepository::upsertHeader(
-        [
-          'module'=>$module,'doc_type'=>$docType,'doc_id'=>$docId,
-          'doc_no'=>$docNo ?: null,
-          'doc_title'=>$title ?: null,
-          'status'=>$status ?: null,
+      $cdef     = $ctx['CDEF01_id'] ?? null;
+      $period   = $ctx['period_id'] ?? null;
+      $facility = $ctx['facility_id'] ?? null;
+
+      $updateDoc = [
+        '$set' => [
+          'target' => [
+            'module'    => $module,
+            'doc_type'  => $docType,
+            'doc_id'    => $docId,
+            'doc_no'    => $docNo ?: null,
+            'doc_title' => $title ?: null,
+            'status'    => $status ?: null,
+          ],
+          'header'     => $header,
+          'target_key' => $targetKey,
+          'updated_at' => $now,
         ],
-        $header,
-        $ctx
-      );
+      ];
 
-      $targetKey = (string)($hdr['target_key'] ?? '');
-      if ($targetKey === '') throw new RuntimeException('target_key missing');
+      if ($existingArr && !empty($existingArr['_id'])) {
+        MongoManager::collection('GENDOC01E')->updateOne(
+          ['_id' => new MongoDB\BSON\ObjectId((string)$existingArr['_id'])],
+          $updateDoc
+        );
+      } else {
+        $insert = [
+          'context' => [
+            'CDEF01_id'   => $cdef,
+            'period_id'   => $period ?: 'GLOBAL',
+            'facility_id' => ($facility === '' ? null : $facility),
+          ],
+          'target' => $updateDoc['$set']['target'],
+          'header' => $header,
+          'target_key' => $targetKey,
+          'created_at' => $now,
+          'updated_at' => $now,
+          'last_version' => 0,
+        ];
+        MongoManager::collection('GENDOC01E')->insertOne($insert);
+      }
 
-      // 2) Atomic version (V1→V2→V3)
+      // Atomic version (her zaman yeni version)
       $newVersion = GENDOC01ERepository::nextVersion($targetKey, $ctx);
 
-      // 3) BODY insert
-      $ins = GENDOC01TRepository::insertVersion(
+      // BODY insert
+      GENDOC01TRepository::insertVersion(
         $targetKey,
         $newVersion,
         $bodyArr,
@@ -165,14 +303,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         ]
       );
 
-      // 4) SAVE log
+      // SAVE log
       $saveLogId = ActionLogger::success('GENDOC.ADMIN.SAVE', [
         'source' => 'public/gendoc_admin.php',
         'target_key' => $targetKey,
         'version' => $newVersion,
       ], $ctx);
 
-      // 5) SNAPSHOT final state (header+body)
+      // SNAPSHOT
       $snap = SnapshotWriter::capture(
         [
           'module'    => $module,
@@ -193,7 +331,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         ]
       );
 
-      // 6) EVENT (summary data içine)
+      // EVENT
       EventWriter::emit(
         'GENDOC.ADMIN.SAVE',
         [
@@ -222,7 +360,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         ]
       );
 
-      // PRG
+      // PRG -> save sonrası latest'e düş (v paramını kaldırıyoruz)
       $redir = '/php-mongo-erp/public/gendoc_admin.php?module=' . rawurlencode($module)
              . '&doc_type=' . rawurlencode($docType)
              . '&doc_id=' . rawurlencode($docId)
@@ -261,8 +399,9 @@ $toast = trim($_GET['toast'] ?? '');
     .card{ border:1px solid #eee; border-radius:12px; padding:12px; }
     .code{ font-family: ui-monospace, Menlo, Consolas, monospace; }
     .lockbar{
-      display:flex; gap:10px; align-items:center; margin:10px 0; flex-wrap:wrap;
+      display:flex; gap:10px; align-items:center; flex-wrap:wrap;
       padding:8px 10px; border:1px solid #eee; border-radius:8px; background:#fafafa;
+      margin:10px 0;
     }
     .badge{
       display:inline-block; padding:3px 8px; border-radius:999px; font-size:12px;
@@ -283,13 +422,21 @@ $toast = trim($_GET['toast'] ?? '');
   <?php if ($targetKey): ?>
     &nbsp;|&nbsp; target_key: <span class="code"><?php echo h($targetKey); ?></span>
   <?php endif; ?>
+  <?php if ($loadedVersion > 0): ?>
+    &nbsp;|&nbsp; loaded: <span class="code">V<?php echo (int)$loadedVersion; ?></span>
+  <?php endif; ?>
 </div>
 
 <div class="lockbar">
   <span class="badge">LOCK: editing</span>
   <span class="small" id="lockStatusText">Lock kontrol ediliyor…</span>
   <span class="small" id="saveStatusText"></span>
+  <span class="small" style="color:#999;">(Not: Lock bilgi amaçlı; alanlar kilitlenmez.)</span>
 </div>
+
+<?php if ($toast === 'save'): ?>
+  <p style="color:green;">✅ Kaydedildi.</p>
+<?php endif; ?>
 
 <?php if ($err): ?><p style="color:red;"><?php echo h($err); ?></p><?php endif; ?>
 
@@ -319,17 +466,46 @@ $toast = trim($_GET['toast'] ?? '');
               </option>
             <?php endforeach; ?>
           </select>
+          <div class="small">Not: cancelled seçsen bile sonra tekrar başka statüye alıp kaydedebilirsin.</div>
+        </div>
+      </div>
+
+      <!-- ✅ Version select -->
+      <div class="bar">
+        <div style="flex:1">
+          <div class="small">Version (yüklemek için)</div>
+          <select id="verSelect">
+            <?php if (empty($versions)): ?>
+              <option value="0" selected>latest</option>
+            <?php else: ?>
+              <option value="0" <?php echo ($selectedV<=0?'selected':''); ?>>latest (V<?php echo (int)$latestVersion; ?>)</option>
+              <?php foreach ($versions as $v): ?>
+                <option value="<?php echo (int)$v; ?>" <?php echo ((int)$selectedV===(int)$v ? 'selected' : ''); ?>>
+                  V<?php echo (int)$v; ?>
+                </option>
+              <?php endforeach; ?>
+            <?php endif; ?>
+          </select>
+          <div class="small">Seçince sayfa reload olur, body o versiyondan açılır.</div>
         </div>
       </div>
 
       <div class="bar">
         <button class="btn btn-primary" type="submit">Kaydet</button>
-        <a class="btn" target="_blank" href="/php-mongo-erp/public/audit_view.php?module=<?php echo urlencode($module); ?>&doc_type=<?php echo urlencode($docType); ?>&doc_id=<?php echo urlencode($docId); ?>">Audit View</a>
-        <a class="btn" target="_blank" href="/php-mongo-erp/public/timeline.php?module=<?php echo urlencode($module); ?>&doc_type=<?php echo urlencode($docType); ?>&doc_id=<?php echo urlencode($docId); ?>">Timeline</a>
+
+        <a class="btn" target="_blank"
+           href="/php-mongo-erp/public/audit_view.php?module=<?php echo urlencode($module); ?>&doc_type=<?php echo urlencode($docType); ?>&doc_id=<?php echo urlencode($docId); ?>">
+          Audit View
+        </a>
+
+        <a class="btn" target="_blank"
+           href="/php-mongo-erp/public/timeline.php?module=<?php echo urlencode($module); ?>&doc_type=<?php echo urlencode($docType); ?>&doc_id=<?php echo urlencode($docId); ?>">
+          Timeline
+        </a>
       </div>
 
       <div class="small">
-        Not: Kaydet → GENDOC01E header + GENDOC01T version + Snapshot + Event
+        Not: Kaydet her zaman yeni version üretir (V+1). Seçili versiyonu ezmez.
       </div>
     </div>
 
@@ -348,17 +524,29 @@ $toast = trim($_GET['toast'] ?? '');
     if (el) el.textContent = msg || '';
   }
 
-  // PRG sonrası lockbar içinde göster
   const qs = new URLSearchParams(window.location.search);
   if ((qs.get('toast') || '') === 'save') setSaveStatus('✅ Kaydedildi.');
 
+  // ✅ version select -> reload with v=
+  const sel = document.getElementById('verSelect');
+  if (sel) {
+    sel.addEventListener('change', function(){
+      const v = String(sel.value || '0');
+      const url = new URL(window.location.href);
+      if (v === '0') url.searchParams.delete('v');
+      else url.searchParams.set('v', v);
+      url.searchParams.delete('toast');
+      window.location.href = url.toString();
+    });
+  }
+
+  // LOCK info
   const lockStatusText = document.getElementById('lockStatusText');
 
   const module  = <?php echo json_encode($module); ?>;
   const docType = <?php echo json_encode($docType); ?>;
   const docId   = <?php echo json_encode($docId); ?>;
 
-  // doc_no/title status değişebilir; lock acquire için initial değer yeterli
   const docNo   = <?php echo json_encode($docNo); ?>;
   const docTitle= <?php echo json_encode($title); ?>;
 
@@ -387,10 +575,10 @@ $toast = trim($_GET['toast'] ?? '');
       acquired = !!j.acquired;
 
       if (acquired) {
-        lockStatusText.textContent = 'Kilit sende. (editing) — çıkınca otomatik bırakılacak.';
+        lockStatusText.textContent = 'Kilit sende. (editing) — alanlar kilitlenmez.';
       } else {
         const who = j.lock?.context?.username ? (' (' + j.lock.context.username + ')') : '';
-        lockStatusText.textContent = 'Kilit başka bir kullanıcıda' + who + '.';
+        lockStatusText.textContent = 'Kilit başka kullanıcıda' + who + ' — yine de düzenleyebilirsin.';
       }
     } catch(e){
       acquired = false;

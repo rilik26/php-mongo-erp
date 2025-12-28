@@ -1,117 +1,190 @@
 <?php
 /**
- * core/event/EventWriter.php
+ * core/event/EventWriter.php (FINAL)
  *
- * EVENT STANDARD (V1 - FINAL)
- * - event_code
- * - created_at
- * - context
- * - target
- * - refs: log_id / snapshot_id / prev_snapshot_id / request_id
- * - data: event'e özel payload (summary dahil burada)
+ * - Event insert helper
+ * - ✅ target meta auto-fill: doc_no / doc_title / status
+ *   Fallback sırası:
+ *   1) target içindekiler
+ *   2) data.summary (doc_no/title/status)
+ *   3) refs.snapshot_id üzerinden SNAP01E.target
  */
-
-use MongoDB\BSON\UTCDateTime;
 
 final class EventWriter
 {
-    public static function emit(
-        string $eventCode,
-        array $data = [],
-        array $target = [],
-        array $ctxOverride = [],
-        array $refs = []
-    ): string {
-        $context = self::resolveContext();
-        if (!empty($ctxOverride)) {
-            $context = array_merge($context, $ctxOverride);
-            $context = self::normalizeContext($context);
-        }
+  public static function emit(
+    string $eventCode,
+    array $data,
+    array $target,
+    array $ctx,
+    array $refs = []
+  ): array {
 
-        $target = self::normalizeTarget($target);
+    $eventCode = trim($eventCode);
+    if ($eventCode === '') $eventCode = 'UNKNOWN.EVENT';
 
-        // request_id otomatik
-        $refs = array_merge(['request_id' => self::requestId()], $refs);
-        // refs içindeki null temizle
-        $refs = self::cleanNulls($refs);
+    $target = self::normalizeTargetMeta($target, $data, $refs);
 
-        // refs içine summary koyma (kaza ile geldiyse sil)
-        if (isset($refs['summary'])) unset($refs['summary']);
-        if (isset($refs['diff'])) unset($refs['diff']);
+    // target_key üret (eventleri aynı evrak altında gruplayabilmek için)
+    $targetKey = self::buildTargetKey($target, $ctx);
 
-        $doc = [
-            'event_code'  => $eventCode,
-            'created_at'  => new UTCDateTime(),
-            'context'     => $context,
-            'target'      => $target ?: null,
-            'refs'        => !empty($refs) ? $refs : null,
-            'data'        => $data ?: null,
-        ];
+    $nowMs = (int) floor(microtime(true) * 1000);
+    $nowUtc = new MongoDB\BSON\UTCDateTime($nowMs);
 
-        $res = MongoManager::collection('EVENT01E')->insertOne($doc);
-        return (string)$res->getInsertedId();
+    // request_id yoksa üret (debug için)
+    if (!isset($refs['request_id']) || !is_string($refs['request_id']) || trim($refs['request_id']) === '') {
+      $refs['request_id'] = bin2hex(random_bytes(8));
     }
 
-    private static function resolveContext(): array
-    {
-        $ctx = [];
+    $doc = [
+      'event_code' => $eventCode,
+      'created_at' => $nowUtc,
 
-        if (class_exists('Context')) {
-            try { $ctx = Context::get(); } catch (Throwable $e) { $ctx = []; }
-        }
+      'context' => [
+        'username'     => $ctx['username'] ?? null,
+        'UDEF01_id'    => $ctx['UDEF01_id'] ?? null,
+        'CDEF01_id'    => $ctx['CDEF01_id'] ?? null,
+        'period_id'    => $ctx['period_id'] ?? null,
+        'facility_id'  => $ctx['facility_id'] ?? null,
+        'session_id'   => $ctx['session_id'] ?? ($_SESSION['sid'] ?? null),
+      ],
 
-        if (empty($ctx) && isset($_SESSION['context']) && is_array($_SESSION['context'])) {
-            $ctx = $_SESSION['context'];
-        }
+      'target' => [
+        'module'    => $target['module'] ?? null,
+        'doc_type'  => $target['doc_type'] ?? null,
+        'doc_id'    => $target['doc_id'] ?? null,
 
-        return self::normalizeContext($ctx);
+        // ✅ target meta (timeline kartları için)
+        'doc_no'    => $target['doc_no'] ?? null,
+        'doc_title' => $target['doc_title'] ?? null,
+        'status'    => $target['status'] ?? null,
+      ],
+
+      'target_key' => $targetKey,
+
+      'refs' => $refs,
+      'data' => $data,
+    ];
+
+    // boş stringleri null'a çevir (index/unique çakışmalarını azaltır)
+    $doc = self::emptyToNullDeep($doc);
+
+    $ins = MongoManager::collection('EVENT01E')->insertOne($doc);
+    $id = $ins->getInsertedId();
+    if ($id instanceof MongoDB\BSON\ObjectId) $id = (string)$id;
+
+    return [
+      'ok' => true,
+      'event_id' => $id,
+      'target_key' => $targetKey,
+    ];
+  }
+
+  /**
+   * ✅ target.meta auto fill
+   */
+  private static function normalizeTargetMeta(array $target, array $data, array $refs): array
+  {
+    $docNo    = (string)($target['doc_no'] ?? '');
+    $docTitle = (string)($target['doc_title'] ?? '');
+    $status   = (string)($target['status'] ?? '');
+
+    // 1) summary fallback
+    $sum = $data['summary'] ?? null;
+    if (is_array($sum)) {
+      if ($docNo === '')    $docNo = (string)($sum['doc_no'] ?? '');
+      if ($docTitle === '') $docTitle = (string)($sum['title'] ?? ($sum['doc_title'] ?? ''));
+      if ($status === '')   $status = (string)($sum['status'] ?? '');
     }
 
-    private static function normalizeContext(array $ctx): array
-    {
-        return [
-            'UDEF01_id'   => $ctx['UDEF01_id'] ?? null,
-            'username'    => $ctx['username'] ?? null,
-            'CDEF01_id'   => $ctx['CDEF01_id'] ?? null,
-            'period_id'   => $ctx['period_id'] ?? null,
-            'facility_id' => $ctx['facility_id'] ?? null,
-            'role'        => $ctx['role'] ?? null,
-            'session_id'  => $ctx['session_id'] ?? session_id(),
-        ];
+    // 2) snapshot fallback
+    if (($docNo === '' || $docTitle === '' || $status === '') && !empty($refs['snapshot_id'])) {
+      $snapTarget = self::loadSnapshotTarget((string)$refs['snapshot_id']);
+      if (is_array($snapTarget)) {
+        if ($docNo === '')    $docNo = (string)($snapTarget['doc_no'] ?? '');
+        if ($docTitle === '') $docTitle = (string)($snapTarget['doc_title'] ?? '');
+        if ($status === '')   $status = (string)($snapTarget['status'] ?? '');
+      }
     }
 
-    private static function normalizeTarget(array $t): array
-    {
-        if (empty($t)) return [];
+    if ($docNo !== '')    $target['doc_no'] = $docNo;
+    if ($docTitle !== '') $target['doc_title'] = $docTitle;
+    if ($status !== '')   $target['status'] = $status;
 
-        $out = [];
-        if (isset($t['module']))   $out['module']   = (string)$t['module'];
-        if (isset($t['doc_type'])) $out['doc_type'] = (string)$t['doc_type'];
-        if (isset($t['doc_id']))   $out['doc_id']   = (string)$t['doc_id'];
-        if (isset($t['doc_no']))   $out['doc_no']   = (string)$t['doc_no'];
-        if (isset($t['doc_date'])) $out['doc_date'] = $t['doc_date'];
+    return $target;
+  }
 
-        return $out;
+  private static function loadSnapshotTarget(string $snapshotId): ?array
+  {
+    $snapshotId = trim($snapshotId);
+    if ($snapshotId === '') return null;
+
+    try {
+      $oid = new MongoDB\BSON\ObjectId($snapshotId);
+    } catch (Throwable $e) {
+      return null;
     }
 
-    private static function requestId(): string
-    {
-        if (!empty($_SERVER['HTTP_X_REQUEST_ID'])) {
-            return (string)$_SERVER['HTTP_X_REQUEST_ID'];
-        }
+    $doc = MongoManager::collection('SNAP01E')->findOne(
+      ['_id' => $oid],
+      ['projection' => ['target' => 1]]
+    );
 
-        static $rid = null;
-        if ($rid) return $rid;
+    if (!$doc) return null;
 
-        $rid = bin2hex(random_bytes(8));
-        return $rid;
+    if ($doc instanceof MongoDB\Model\BSONDocument) $doc = $doc->getArrayCopy();
+    $doc = self::bsonToArray($doc);
+
+    $t = $doc['target'] ?? null;
+    return is_array($t) ? $t : null;
+  }
+
+  private static function buildTargetKey(array $target, array $ctx): string
+  {
+    $cdef     = (string)($ctx['CDEF01_id'] ?? '');
+    $period   = (string)($ctx['period_id'] ?? '');
+    $facility = (string)($ctx['facility_id'] ?? '');
+
+    $module   = (string)($target['module'] ?? '');
+    $docType  = (string)($target['doc_type'] ?? '');
+    $docId    = (string)($target['doc_id'] ?? '');
+
+    // aynı formatı snapshot/lock tarafında da kullanıyorsan burada da uyumlu kalır
+    return implode('|', [$cdef, $period, $facility, $module, $docType, $docId]);
+  }
+
+  private static function bsonToArray($v)
+  {
+    if ($v instanceof MongoDB\Model\BSONDocument || $v instanceof MongoDB\Model\BSONArray) {
+      $v = $v->getArrayCopy();
     }
-
-    private static function cleanNulls(array $a): array
-    {
-        foreach ($a as $k => $v) {
-            if ($v === null) unset($a[$k]);
-        }
-        return $a;
+    if ($v instanceof MongoDB\BSON\UTCDateTime) {
+      return $v->toDateTime()->format('c');
     }
+    if ($v instanceof MongoDB\BSON\ObjectId) {
+      return (string)$v;
+    }
+    if (is_array($v)) {
+      $out = [];
+      foreach ($v as $k => $vv) $out[$k] = self::bsonToArray($vv);
+      return $out;
+    }
+    return $v;
+  }
+
+  private static function emptyToNullDeep($v)
+  {
+    if (is_string($v)) {
+      $t = trim($v);
+      return ($t === '') ? null : $v;
+    }
+    if (is_array($v)) {
+      $out = [];
+      foreach ($v as $k => $vv) {
+        $out[$k] = self::emptyToNullDeep($vv);
+      }
+      return $out;
+    }
+    return $v;
+  }
 }
