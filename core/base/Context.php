@@ -1,60 +1,53 @@
 <?php
 /**
- * Context.php (FINAL)
+ * core/base/Context.php (FINAL)
  *
  * AMAÇ:
- * - Aktif request'in çalışma bağlamını (session içindeki context) tek yerden vermek
- *
- * SORUMLULUK:
- * - bootFromSession(): session'dan context'i yükler
- * - get(): aktif context'i döner
- *
- * YAPMAZ:
- * - login yapmaz
- * - context'i session'a yazmaz
+ * - Session context'i güvenli şekilde uygulama context'ine almak
+ * - Whitelist yüzünden yeni alanların kaybolmasını engellemek
+ * - company_name / company_code gibi ekstra alanları KORUMAK
  */
 
 final class Context
 {
-    private static ?array $current = null;
+    private static array $ctx = [];
 
     public static function bootFromSession(): void
     {
-        // Session başlamadıysa güvenli şekilde başlat
-        if (session_status() !== PHP_SESSION_ACTIVE) {
-            session_start();
-        }
-
         if (!isset($_SESSION['context']) || !is_array($_SESSION['context'])) {
-            throw new ContextException('Context not found in session');
+            throw new ContextException('context_not_found_in_session');
         }
 
-        // Shallow copy: referans karışıklığı olmasın
-        self::$current = $_SESSION['context'];
+        // ✅ Session'daki context'i komple al (yeni alanlar kaybolmasın)
+        $c = $_SESSION['context'];
+
+        // ✅ Minimum alanları garanti et
+        $c['username']   = (string)($c['username'] ?? '');
+        $c['CDEF01_id']  = (string)($c['CDEF01_id'] ?? '');
+        $c['period_id']  = (string)($c['period_id'] ?? '');
+        $c['role']       = $c['role'] ?? null;
+
+        // ✅ Opsiyonel alanları normalize et
+        $c['company_name'] = (string)($c['company_name'] ?? '');
+        $c['company_code'] = (string)($c['company_code'] ?? '');
+        $c['facility_id']  = $c['facility_id'] ?? null;
+
+        self::$ctx = $c;
     }
 
     public static function get(): array
     {
-        if (self::$current === null) {
-            throw new ContextException('Context not initialized');
+        if (empty(self::$ctx)) {
+            // bazı sayfalarda boot unutulursa session'dan okumaya çalış
+            if (isset($_SESSION['context']) && is_array($_SESSION['context'])) {
+                self::$ctx = $_SESSION['context'];
+            }
         }
-
-        return self::$current;
+        return self::$ctx;
     }
 
-    /**
-     * Context var mı? (guard yazmak kolaylaşır)
-     */
-    public static function has(): bool
+    public static function set(array $ctx): void
     {
-        return is_array(self::$current);
-    }
-
-    /**
-     * Patlamasın istersen: exception yerine [] dönsün
-     */
-    public static function tryGet(): array
-    {
-        return is_array(self::$current) ? self::$current : [];
+        self::$ctx = $ctx;
     }
 }

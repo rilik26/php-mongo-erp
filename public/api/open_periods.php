@@ -1,18 +1,13 @@
 <?php
 /**
- * open_periods.php (API)
+ * open_periods.php (API) (FINAL)
  *
- * AMAÇ:
- * - Login ekranında period select'i tek adımda doldurmak
- * - username -> UDEF01E -> CDEF01_id -> PERIOD01T(open) zinciriyle dönemleri döndürmek
- *
- * GÜVENLİK NOTU:
- * - Bu endpoint password doğrulamaz (UI kolaylığı).
- * - İstersen ileride rate-limit / captcha / veya password ile doğrulama ekleriz.
- */define('SKIP_I18N_BOOT', true);
+ * - username -> UDEF01E -> CDEF01_id -> PERIOD01T(listAllPeriods)
+ */
+
+define('SKIP_I18N_BOOT', true);
 require_once __DIR__ . '/../../core/bootstrap.php';
 
-require_once __DIR__ . '/../../core/bootstrap.php';
 require_once __DIR__ . '/../../core/auth/SessionManager.php';
 require_once __DIR__ . '/../../app/modules/period/PERIOD01Repository.php';
 
@@ -20,11 +15,9 @@ SessionManager::start();
 
 header('Content-Type: application/json; charset=utf-8');
 
-$username = $_GET['username'] ?? '';
-$username = trim($username);
-
+$username = trim((string)($_GET['username'] ?? ''));
 if ($username === '') {
-    echo json_encode(['ok' => false, 'periods' => []]);
+    echo json_encode(['ok' => false, 'periods' => []], JSON_UNESCAPED_UNICODE);
     exit;
 }
 
@@ -34,20 +27,20 @@ $user = MongoManager::collection('UDEF01E')->findOne([
 ]);
 
 if (!$user) {
-    echo json_encode(['ok' => false, 'periods' => []]);
+    echo json_encode(['ok' => false, 'periods' => []], JSON_UNESCAPED_UNICODE);
     exit;
 }
 
-$companyId = $user['CDEF01_id'] ?? null;
-
-if (!$companyId || strlen((string)$companyId) !== 24) {
-    echo json_encode(['ok' => false, 'periods' => []]);
+$companyId = (string)($user['CDEF01_id'] ?? '');
+if ($companyId === '' || strlen($companyId) !== 24) {
+    echo json_encode(['ok' => false, 'periods' => []], JSON_UNESCAPED_UNICODE);
     exit;
 }
 
-$periods = PERIOD01Repository::listAllPeriods((string)$companyId);
+// ✅ repo artık string/ObjectId uyumlu
+$periods = PERIOD01Repository::listAllPeriods($companyId);
 
 echo json_encode([
     'ok'      => true,
     'periods' => $periods
-]);
+], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);

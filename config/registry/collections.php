@@ -33,7 +33,7 @@ return [
 
     'GENDOC01E',
     'GENDOC01T',
-    
+    'CDEF01E',
     
 
 ];

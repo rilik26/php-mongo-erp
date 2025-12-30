@@ -1,83 +1,82 @@
 <?php
 /**
- * PERIOD01Repository.php
+ * PERIOD01Repository.php (FINAL)
  *
- * AMAÇ:
- * - Firma bazlı PERIOD01T (dönem tablosu) veri erişimi
- *
- * MODEL:
- * - CDEF01_id: firma _id (string, 24 char)
- * - period_id: "2025"
- * - title: "2025 Dönemi"
- * - is_open: true/false
- *
- * SORUMLULUK:
- * - listOpenPeriods(): sadece açık dönemler
- * - listAllPeriods(): açık + kapalı dönemler (UI için)
- * - isOpen(): doğrulama (login / change_period güvenliği)
+ * - Firma bazlı PERIOD01T
+ * - CDEF01_id alanı bazen string bazen ObjectId olabildiği için
+ *   sorgular hem string hem ObjectId destekler.
  */
 
 class PERIOD01Repository
 {
-    /**
-     * Firma için SADECE açık dönemleri getir
-     */
+    private static function companyFilter(string $companyId): array
+    {
+        $companyId = trim($companyId);
+
+        // hem string hem ObjectId ile eşleştir
+        $or = [
+            ['CDEF01_id' => $companyId],
+        ];
+
+        if (strlen($companyId) === 24) {
+            try {
+                $or[] = ['CDEF01_id' => new MongoDB\BSON\ObjectId($companyId)];
+            } catch (Throwable $e) {}
+        }
+
+        return ['$or' => $or];
+    }
+
     public static function listOpenPeriods(string $companyId): array
     {
+        $filter = self::companyFilter($companyId);
+        $filter['is_open'] = true;
+
         $cursor = MongoManager::collection('PERIOD01T')->find(
-            [
-                'CDEF01_id' => $companyId,
-                'is_open'   => true
-            ],
+            $filter,
             ['sort' => ['period_id' => 1]]
         );
 
         return self::normalizeCursor($cursor);
     }
 
-    /**
-     * Firma için TÜM dönemleri getir (açık + kapalı)
-     * UI’da disabled göstermek için kullanılır.
-     */
     public static function listAllPeriods(string $companyId): array
     {
+        $filter = self::companyFilter($companyId);
+
         $cursor = MongoManager::collection('PERIOD01T')->find(
-            [
-                'CDEF01_id' => $companyId
-            ],
+            $filter,
             ['sort' => ['period_id' => 1]]
         );
 
         return self::normalizeCursor($cursor);
     }
 
-    /**
-     * Period o firma için açık mı?
-     * Güvenlik kontrolü burada yapılır (UI hacklenemez).
-     */
     public static function isOpen(string $periodId, string $companyId): bool
     {
-        $doc = MongoManager::collection('PERIOD01T')->findOne([
-            'CDEF01_id' => $companyId,
-            'period_id' => $periodId,
-            'is_open'   => true
-        ]);
+        $periodId = trim($periodId);
+        if ($periodId === '') return false;
+
+        $filter = self::companyFilter($companyId);
+        $filter['period_id'] = $periodId;
+        $filter['is_open'] = true;
+
+        $doc = MongoManager::collection('PERIOD01T')->findOne($filter);
 
         return (bool)$doc;
     }
 
-    /**
-     * Ortak normalize
-     */
     private static function normalizeCursor($cursor): array
     {
         $out = [];
 
         foreach ($cursor as $doc) {
-            $arr = (array)$doc;
+            if ($doc instanceof MongoDB\Model\BSONDocument) $doc = $doc->getArrayCopy();
+            $arr = is_array($doc) ? $doc : (array)$doc;
+
             $out[] = [
-                'period_id' => $arr['period_id'] ?? null,
-                'title'     => $arr['title'] ?? ($arr['period_id'] ?? ''),
+                'period_id' => (string)($arr['period_id'] ?? ''),
+                'title'     => (string)($arr['title'] ?? ($arr['period_id'] ?? '')),
                 'is_open'   => (bool)($arr['is_open'] ?? false),
             ];
         }
