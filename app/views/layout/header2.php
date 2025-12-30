@@ -2,12 +2,8 @@
 /**
  * header2.php (FINAL)
  *
- * - Materialize navbar yapısını BOZMADAN
- * - Aktif dillerden dinamik language dropdown
- * - Firma bilgisi: session context'ten company_name/company_code gösterir (DB'ye gitmez)
- *
- * BEKLENTİ:
- * - SessionManager::start() ve Context::bootFromSession() daha önce çalışmış olmalı.
+ * - Firma: company_name (+ opsiyonel company_code)
+ * - Dönem: period_label (PERIOD01T'den)
  */
 
 $ctx = [];
@@ -15,9 +11,14 @@ try { $ctx = Context::get(); } catch (Throwable $e) { $ctx = []; }
 
 $username    = $ctx['username'] ?? '';
 $companyId   = $ctx['CDEF01_id'] ?? '';
-$companyName = $ctx['company_name'] ?? $companyId; // ✅ artık ID değil name göster
+$companyName = $ctx['company_name'] ?? $companyId;
 $companyCode = $ctx['company_code'] ?? '';
-$period      = $ctx['period_id'] ?? '';
+
+// ✅ yeni
+$periodLabel = $ctx['period_label'] ?? '';
+$periodOid   = $ctx['PERIOD01T_id'] ?? '';
+
+if ($periodLabel === '') $periodLabel = $periodOid; // fallback
 
 if (!function_exists('_e')) {
   function _e(string $key, array $params = []): void { echo htmlspecialchars($key, ENT_QUOTES, 'UTF-8'); }
@@ -38,9 +39,7 @@ $activeLangs = [
 
 try {
   if (class_exists('LanguageManager')) {
-    if (method_exists('LanguageManager', 'boot')) {
-      LanguageManager::boot();
-    }
+    if (method_exists('LanguageManager', 'boot')) LanguageManager::boot();
 
     if (method_exists('LanguageManager', 'get')) {
       $tmp = (string)LanguageManager::get();
@@ -56,17 +55,15 @@ try {
         foreach ($list as $it) {
           if (is_string($it)) {
             $lc = strtolower(trim($it));
-            if ($lc !== '') {
-              $norm[] = ['lang_code'=>$lc,'name'=>strtoupper($lc),'direction'=>'ltr','is_default'=>false];
-            }
+            if ($lc !== '') $norm[] = ['lang_code'=>$lc,'name'=>strtoupper($lc),'direction'=>'ltr','is_default'=>false];
           } elseif (is_array($it)) {
             $lc = strtolower(trim((string)($it['lang_code'] ?? '')));
             if ($lc !== '') {
               $norm[] = [
-                'lang_code'   => $lc,
-                'name'        => (string)($it['name'] ?? strtoupper($lc)),
-                'direction'   => (string)($it['direction'] ?? 'ltr'),
-                'is_default'  => (bool)($it['is_default'] ?? false),
+                'lang_code'  => $lc,
+                'name'       => (string)($it['name'] ?? strtoupper($lc)),
+                'direction'  => (string)($it['direction'] ?? 'ltr'),
+                'is_default' => (bool)($it['is_default'] ?? false),
               ];
             }
           }
@@ -95,9 +92,7 @@ $langFlag = lang_flag_class($lang);
 $next = $_SERVER['REQUEST_URI'] ?? '/php-mongo-erp/public/index.php';
 if ($next === '') $next = '/php-mongo-erp/public/index.php';
 ?>
-<nav
-  class="layout-navbar container-xxl navbar-detached navbar navbar-expand-xl align-items-center bg-navbar-theme"
-  id="layout-navbar">
+<nav class="layout-navbar container-xxl navbar-detached navbar navbar-expand-xl align-items-center bg-navbar-theme" id="layout-navbar">
 
   <div class="layout-menu-toggle navbar-nav align-items-xl-center me-4 me-xl-0 d-xl-none">
     <a class="nav-item nav-link px-0 me-xl-6" href="javascript:void(0)">
@@ -125,19 +120,18 @@ if ($next === '') $next = '/php-mongo-erp/public/index.php';
         </span>
 
         <span style="margin-left:10px;"><?php _e('common.period'); ?>:
-          <strong><?php echo h($period); ?></strong>
+          <strong><?php echo h($periodLabel); ?></strong>
         </span>
       </div>
 
       <!-- Quick links (Language) -->
       <li class="nav-item dropdown-shortcuts navbar-dropdown dropdown me-sm-2 me-xl-0">
-        <a
-          class="nav-link dropdown-toggle hide-arrow btn btn-icon btn-text-secondary rounded-pill"
-          href="javascript:void(0);"
-          data-bs-toggle="dropdown"
-          data-bs-auto-close="outside"
-          aria-expanded="false"
-          title="<?php echo h(strtoupper($lang)); ?>">
+        <a class="nav-link dropdown-toggle hide-arrow btn btn-icon btn-text-secondary rounded-pill"
+           href="javascript:void(0);"
+           data-bs-toggle="dropdown"
+           data-bs-auto-close="outside"
+           aria-expanded="false"
+           title="<?php echo h(strtoupper($lang)); ?>">
           <i class="fi <?php echo h($langFlag); ?> fis" style="font-size:18px;"></i>
         </a>
 
@@ -150,7 +144,6 @@ if ($next === '') $next = '/php-mongo-erp/public/index.php';
 
           <div class="dropdown-shortcuts-list scrollable-container">
             <div class="row row-bordered overflow-visible g-0">
-
               <?php foreach ($activeLangs as $li):
                 $lc = strtolower(trim((string)($li['lang_code'] ?? '')));
                 if ($lc === '') continue;
@@ -165,12 +158,11 @@ if ($next === '') $next = '/php-mongo-erp/public/index.php';
                 $style = $isCurrent ? 'background:rgba(0,0,0,.03);' : '';
               ?>
                 <a class="dropdown-shortcuts-item col"
-                  href="<?php echo h($href); ?>"
-                  style="<?php echo $style; ?> text-decoration:none;">
+                   href="<?php echo h($href); ?>"
+                   style="<?php echo $style; ?> text-decoration:none;">
                   <span class="dropdown-shortcuts-icon rounded-circle mb-2">
                     <i class="fi <?php echo h($flag); ?> fis" style="font-size:25px;"></i>
                   </span>
-
                   <div class="small" style="text-align:center; margin-top:-4px;">
                     <?php echo h($name); ?>
                     <?php if ($isCurrent): ?>
@@ -179,25 +171,20 @@ if ($next === '') $next = '/php-mongo-erp/public/index.php';
                   </div>
                 </a>
               <?php endforeach; ?>
-
             </div>
           </div>
         </div>
       </li>
-      <!-- /Quick links -->
 
-      <!-- Notification (aynı) -->
       <li class="nav-item dropdown-notifications navbar-dropdown dropdown me-4 me-xl-1">
-        <a
-          class="nav-link dropdown-toggle hide-arrow btn btn-icon btn-text-secondary rounded-pill"
-          href="javascript:void(0);"
-          data-bs-toggle="dropdown"
-          data-bs-auto-close="outside"
-          aria-expanded="false">
+        <a class="nav-link dropdown-toggle hide-arrow btn btn-icon btn-text-secondary rounded-pill"
+           href="javascript:void(0);"
+           data-bs-toggle="dropdown"
+           data-bs-auto-close="outside"
+           aria-expanded="false">
           <i class="icon-base ri ri-notification-2-line icon-22px"></i>
           <span class="position-absolute top-0 start-50 translate-middle-y badge badge-dot bg-danger mt-2 border"></span>
         </a>
-        <?php /* notification dropdown HTML'in olduğu gibi kalsın */ ?>
       </li>
 
       <span style="float:right;">
@@ -205,7 +192,6 @@ if ($next === '') $next = '/php-mongo-erp/public/index.php';
         &nbsp; | &nbsp;
       </span>
 
-      <!-- User dropdown (aynı) -->
       <li class="nav-item navbar-dropdown dropdown-user dropdown">
         <a class="nav-link dropdown-toggle hide-arrow" href="javascript:void(0);" data-bs-toggle="dropdown">
           <div class="avatar avatar-online">

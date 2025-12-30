@@ -4,8 +4,7 @@
  *
  * AMAÇ:
  * - Session context'i güvenli şekilde uygulama context'ine almak
- * - Whitelist yüzünden yeni alanların kaybolmasını engellemek
- * - company_name / company_code gibi ekstra alanları KORUMAK
+ * - Yeni alanlar (company_name/company_code/PERIOD01T_id/period_label) kaybolmasın
  */
 
 final class Context
@@ -18,18 +17,22 @@ final class Context
             throw new ContextException('context_not_found_in_session');
         }
 
-        // ✅ Session'daki context'i komple al (yeni alanlar kaybolmasın)
         $c = $_SESSION['context'];
 
-        // ✅ Minimum alanları garanti et
+        // minimum
         $c['username']   = (string)($c['username'] ?? '');
         $c['CDEF01_id']  = (string)($c['CDEF01_id'] ?? '');
-        $c['period_id']  = (string)($c['period_id'] ?? '');
         $c['role']       = $c['role'] ?? null;
 
-        // ✅ Opsiyonel alanları normalize et
+        // ✅ yeni period şeması
+        $c['PERIOD01T_id'] = (string)($c['PERIOD01T_id'] ?? '');
+        $c['period_label'] = (string)($c['period_label'] ?? '');
+
+        // company
         $c['company_name'] = (string)($c['company_name'] ?? '');
         $c['company_code'] = (string)($c['company_code'] ?? '');
+
+        // future
         $c['facility_id']  = $c['facility_id'] ?? null;
 
         self::$ctx = $c;
@@ -37,11 +40,8 @@ final class Context
 
     public static function get(): array
     {
-        if (empty(self::$ctx)) {
-            // bazı sayfalarda boot unutulursa session'dan okumaya çalış
-            if (isset($_SESSION['context']) && is_array($_SESSION['context'])) {
-                self::$ctx = $_SESSION['context'];
-            }
+        if (empty(self::$ctx) && isset($_SESSION['context']) && is_array($_SESSION['context'])) {
+            self::$ctx = $_SESSION['context'];
         }
         return self::$ctx;
     }

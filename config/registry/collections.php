@@ -34,6 +34,11 @@ return [
     'GENDOC01E',
     'GENDOC01T',
     'CDEF01E',
+
+    'ABAC01T',
+    'SORD01E',
+    'SORD01T',
+    'WEBHOOK01E',
     
 
 ];

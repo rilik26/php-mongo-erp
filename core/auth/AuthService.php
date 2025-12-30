@@ -2,9 +2,9 @@
 /**
  * AuthService.php (FINAL)
  *
- * - username + password + period ile login
- * - PERIOD01T firma bazlı open period kontrolü
- * - Session context: company_name / company_code mutlaka set edilir
+ * - username + password + period_oid ile login
+ * - Firma bazlı dönem kontrolü (PERIOD01T _id + is_open)
+ * - Session context: company_name/company_code + PERIOD01T_id + period_label
  */
 
 require_once __DIR__ . '/SessionManager.php';
@@ -13,7 +13,7 @@ require_once __DIR__ . '/../../app/modules/period/PERIOD01Repository.php';
 
 final class AuthService
 {
-    public static function attempt(string $username, string $password, string $periodId): bool
+    public static function attempt(string $username, string $password, string $periodOid): bool
     {
         SessionManager::start();
 
@@ -47,7 +47,9 @@ final class AuthService
             return false;
         }
 
-        if ($periodId === '') {
+        // ✅ periodOid seçili mi?
+        $periodOid = trim($periodOid);
+        if ($periodOid === '' || strlen($periodOid) !== 24) {
             ActionLogger::fail('AUTH.FAIL', [
                 'reason' => 'period_not_selected',
                 'source' => 'AuthService::attempt',
@@ -73,7 +75,8 @@ final class AuthService
             return false;
         }
 
-        if (!PERIOD01Repository::isOpen($periodId, $companyId)) {
+        // ✅ Firma bazlı dönem açık mı? (artık _id ile)
+        if (!PERIOD01Repository::isOpenById($periodOid, $companyId)) {
             ActionLogger::fail('AUTH.FAIL', [
                 'reason' => 'period_closed_or_invalid_for_company',
                 'source' => 'AuthService::attempt',
@@ -81,43 +84,47 @@ final class AuthService
                 'UDEF01_id'  => (string)$user['_id'],
                 'username'   => $user['username'] ?? $username,
                 'CDEF01_id'  => $companyId,
-                'period_id'  => $periodId,
+                'PERIOD01T_id' => $periodOid,
                 'session_id' => session_id(),
             ]);
             return false;
         }
 
-        // ✅ Firma bilgisini çek (active filtresi opsiyonel)
+        // ✅ Firma adı/kodu
         $companyName = $companyId;
         $companyCode = '';
-
         try {
             $c = MongoManager::collection('CDEF01E')->findOne([
-                '_id' => new MongoDB\BSON\ObjectId($companyId),
+                '_id'    => new MongoDB\BSON\ObjectId($companyId),
+                'active' => true
             ]);
-
             if ($c instanceof MongoDB\Model\BSONDocument) $c = $c->getArrayCopy();
             if (is_array($c)) {
-                $companyName = trim((string)($c['name'] ?? $companyName));
-                $companyCode = trim((string)($c['code'] ?? $companyCode));
-                if ($companyName === '') $companyName = $companyId;
+                $companyName = (string)($c['name'] ?? $companyName);
+                $companyCode = (string)($c['code'] ?? $companyCode);
             }
-        } catch (Throwable $e) {
-            // fallback: companyName stays companyId
-        }
+        } catch (Throwable $e) {}
+
+        // ✅ period display label
+        $periodLabel = $periodOid;
+        try {
+            $p = PERIOD01Repository::getById($periodOid);
+            if ($p) $periodLabel = (string)($p['title'] ?? ($p['period_id'] ?? $periodLabel));
+        } catch (Throwable $e) {}
 
         $_SESSION['context'] = [
             'UDEF01_id'     => (string)$user['_id'],
             'username'      => (string)($user['username'] ?? $username),
-
             'CDEF01_id'     => $companyId,
             'company_name'  => $companyName,
             'company_code'  => $companyCode,
 
-            'period_id'     => $periodId,
+            // ✅ artık period_id yerine referans
+            'PERIOD01T_id'  => $periodOid,
+            'period_label'  => $periodLabel,
+
             'role'          => $user['role'] ?? null,
             'session_id'    => session_id(),
-
             'facility_id'   => null,
 
             'ip'            => $_SERVER['REMOTE_ADDR'] ?? null,

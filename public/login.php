@@ -1,9 +1,8 @@
 <?php
 /**
- * public/login.php
+ * public/login.php (FINAL)
  *
- * AMAÇ:
- * - Tek ekranda login: username + password + period
+ * - Tek ekranda login: username + password + period (PERIOD01T_id)
  * - period select: username'e göre AJAX ile doldurulur
  * - Dil değiştirme: TR/EN
  */
@@ -22,11 +21,12 @@ if (isset($_SESSION['context']) && is_array($_SESSION['context'])) {
 }
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
-    $username = $_POST['username'] ?? '';
-    $password = $_POST['password'] ?? '';
-    $periodId = $_POST['period_id'] ?? '';
+    $username  = (string)($_POST['username'] ?? '');
+    $password  = (string)($_POST['password'] ?? '');
+    // ✅ artık select value = PERIOD01T _id (24 char)
+    $periodOid = (string)($_POST['period_id'] ?? '');
 
-    if (AuthService::attempt($username, $password, $periodId)) {
+    if (AuthService::attempt($username, $password, $periodOid)) {
         header('Location: /php-mongo-erp/public/index.php');
         exit;
     }
@@ -36,7 +36,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 ?>
 
 <!doctype html>
-
 <html
   lang="en"
   class="layout-wide customizer-hide"
@@ -47,9 +46,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
   data-template="vertical-menu-template">
   <head>
     <meta charset="utf-8" />
-    <meta
-      name="viewport"
-      content="width=device-width, initial-scale=1.0, user-scalable=no, minimum-scale=1.0, maximum-scale=1.0" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no, minimum-scale=1.0, maximum-scale=1.0" />
     <meta name="robots" content="noindex, nofollow" />
 
     <title><?php _e('auth.login'); ?></title>
@@ -59,9 +56,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-    <link
-      href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&ampdisplay=swap"
-      rel="stylesheet" />
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&ampdisplay=swap" rel="stylesheet" />
 
     <link rel="stylesheet" href="theme/assets/vendor/fonts/iconify-icons.css" />
     <link rel="stylesheet" href="theme/assets/vendor/libs/node-waves/node-waves.css" />
@@ -138,10 +133,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
               <div class="mb-5">
                 <div class="input-group input-group-merge">
                   <div class="form-floating form-floating-outline">
+                    <!-- ✅ name aynı kaldı ama value artık PERIOD01T_id -->
                     <select id="period_id" class="form-control" name="period_id" required>
                       <option value=""><?php _e('period.select'); ?></option>
                     </select>
-                    <!-- ✅ label for yanlış bağlanmıştı: username değil period_id olmalı -->
                     <label for="period_id"><?php _e('auth.period'); ?></label>
                   </div>
                 </div>
@@ -227,7 +222,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
             data.periods.forEach(p => {
               const opt = document.createElement('option');
-              opt.value = p.period_id || '';
+              // ✅ value = PERIOD01T _id
+              opt.value = p.period_oid || '';
               opt.textContent = p.title || p.period_id || '';
 
               if (p.is_open === false) {
