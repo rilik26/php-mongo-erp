@@ -3,17 +3,10 @@
  * public/locks.php (FINAL)
  *
  * - Aktif lockları listeler
- * - status: editing|viewing|approving badge
- * - doc_no / doc_title gibi UI-friendly target alanları
- * - Benim lockum -> Release
- * - Admin -> Force Release
- *
- * UX:
- * - Acquire/Release: fetch + toast (JSON'a yönlendirme yok)
- * - Evraka Git: lang_admin veya gendoc_edit'e gider
- *
- * Guard:
- * - login şart
+ * - status badge
+ * - doc_no / doc_title alanlarını UI’da gösterir
+ * - Acquire/Release fetch + toast
+ * - SORD01E için doc_no/doc_title boşsa SORD01E koleksiyonundan resolve eder
  */
 
 require_once __DIR__ . '/../core/bootstrap.php';
@@ -25,34 +18,30 @@ require_once __DIR__ . '/../core/action/ActionLogger.php';
 SessionManager::start();
 
 if (!isset($_SESSION['context']) || !is_array($_SESSION['context'])) {
-  header('Location: /php-mongo-erp/public/login.php');
-  exit;
+  header('Location: /php-mongo-erp/public/login.php'); exit;
 }
 
-try {
-  Context::bootFromSession();
-} catch (ContextException $e) {
-  header('Location: /php-mongo-erp/public/login.php');
-  exit;
+try { Context::bootFromSession(); }
+catch (ContextException $e) {
+  header('Location: /php-mongo-erp/public/login.php'); exit;
 }
 
 $ctx = Context::get();
 $isAdmin = (($ctx['role'] ?? '') === 'admin');
 
-// view log
-ActionLogger::info('LOCKS.VIEW', [
-  'source' => 'public/locks.php'
-], $ctx);
+ActionLogger::info('LOCKS.VIEW', ['source' => 'public/locks.php'], $ctx);
 
 date_default_timezone_set('Europe/Istanbul');
 
 function esc($s): string { return htmlspecialchars((string)$s, ENT_QUOTES, 'UTF-8'); }
+
 function fmt_tr_dt($isoOrAnything): string {
   $s = (string)$isoOrAnything;
   $ts = strtotime($s);
   if ($ts === false) return $s;
   return date('d.m.Y H:i:s', $ts);
 }
+
 function badge_html(string $status): string {
   $status = $status ?: 'editing';
   $map = [
@@ -66,33 +55,69 @@ function badge_html(string $status): string {
 }
 
 /**
- * Lock target -> evrak edit url
+ * Evraka git URL resolver
+ * - salesorder/SORD01E => salesorder/edit.php?id=...
+ * - gendoc => gendoc_edit.php?id=...
+ * - i18n => lang_admin.php
  */
 function doc_url(array $t): ?string {
-  $module = (string)($t['module'] ?? '');
-  $dt = (string)($t['doc_type'] ?? '');
+  $module = strtolower((string)($t['module'] ?? ''));
+  $dt = strtoupper((string)($t['doc_type'] ?? ''));
   $di = (string)($t['doc_id'] ?? '');
 
-  if ($module === 'i18n' && strtoupper($dt) === 'LANG01T' && $di === 'DICT') {
+  // tolerate legacy / wrong module: "sord01e" gibi
+  if ($di === '' && !empty($t['maybe_doc_id'])) {
+    $di = (string)$t['maybe_doc_id'];
+  }
+
+  if ($dt === 'SORD01E' && $di !== '') {
+    return '/php-mongo-erp/public/salesorder/edit.php?id=' . rawurlencode($di);
+  }
+
+  if ($module === 'salesorder' && $dt === 'SORD01E' && $di !== '') {
+    return '/php-mongo-erp/public/salesorder/edit.php?id=' . rawurlencode($di);
+  }
+
+  if ($module === 'i18n' && $dt === 'LANG01T' && $di === 'DICT') {
     return '/php-mongo-erp/public/lang_admin.php';
   }
-  if ($module === 'gendoc' && strtoupper($dt) === 'GENDOC01T' && $di !== '') {
-    // senin projende admin sayfası gendoc_admin.php ise oraya yönlendirmek daha doğru:
-    // return '/php-mongo-erp/public/gendoc_admin.php?module=gen&doc_type=GENDOC01T&doc_id=' . rawurlencode($di);
+
+  if ($module === 'gendoc' && $dt === 'GENDOC01T' && $di !== '') {
     return '/php-mongo-erp/public/gendoc_edit.php?id=' . rawurlencode($di);
   }
 
-  // default fallback
   if ($module !== '' && $dt !== '' && $di !== '') {
     return '/php-mongo-erp/public/timeline.php?module=' . rawurlencode($module) . '&doc_type=' . rawurlencode($dt) . '&doc_id=' . rawurlencode($di);
   }
   return null;
 }
 
+/**
+ * SORD01E meta resolve (doc_no/doc_title/status)
+ */
+function resolve_sord_meta(string $docId): array {
+  if ($docId === '' || strlen($docId) !== 24) return ['doc_no'=>'','doc_title'=>'','status'=>''];
+
+  try { $oid = new MongoDB\BSON\ObjectId($docId); }
+  catch (Throwable $e) { return ['doc_no'=>'','doc_title'=>'','status'=>'']; }
+
+  $d = MongoManager::collection('SORD01E')->findOne(['_id' => $oid], [
+    'projection' => ['header.evrakno'=>1,'header.customer'=>1,'header.status'=>1]
+  ]);
+  if (!$d) return ['doc_no'=>'','doc_title'=>'','status'=>''];
+
+  if ($d instanceof MongoDB\Model\BSONDocument) $d = $d->getArrayCopy();
+  $h = (array)($d['header'] ?? []);
+  return [
+    'doc_no'    => (string)($h['evrakno'] ?? ''),
+    'doc_title' => (string)($h['customer'] ?? ''),
+    'status'    => (string)($h['status'] ?? ''),
+  ];
+}
+
 // --- filters ---
 $q = trim($_GET['q'] ?? '');
 $onlyMine = (($_GET['mine'] ?? '') === '1');
-// ✅ checkbox “active” false gelince de kontrol edelim: default 1
 $onlyActive = (($_GET['active'] ?? '1') !== '0' && ($_GET['active'] ?? '') !== '');
 
 $nowMs = (int) floor(microtime(true) * 1000);
@@ -121,10 +146,7 @@ if ($q !== '') {
 
 $locksCur = MongoManager::collection('LOCK01E')->find(
   $filter,
-  [
-    'sort' => ['locked_at' => -1],
-    'limit' => 1000,
-  ]
+  ['sort' => ['locked_at' => -1], 'limit' => 1000]
 );
 
 $locks = [];
@@ -133,7 +155,6 @@ foreach ($locksCur as $l) {
   $locks[] = $l;
 }
 
-// ✅ Theme header include (HTML head + core css/js)
 require_once __DIR__ . '/../app/views/layout/header.php';
 ?>
 
@@ -141,7 +162,6 @@ require_once __DIR__ . '/../app/views/layout/header.php';
   .code{ font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace; }
   .muted{ color:#888; }
   .small{ font-size:12px; color:#666; }
-  /* DataTables yok burada ama table görünümü theme ile uyumlu olsun */
 </style>
 
 <body>
@@ -168,7 +188,7 @@ require_once __DIR__ . '/../app/views/layout/header.php';
                         Kullanıcı: <strong><?php echo esc($ctx['username'] ?? ''); ?></strong>
                         &nbsp;|&nbsp; Role: <strong><?php echo esc($ctx['role'] ?? ''); ?></strong>
                         &nbsp;|&nbsp; Firma: <strong><?php echo esc($ctx['CDEF01_id'] ?? ''); ?></strong>
-                        &nbsp;|&nbsp; Dönem: <strong><?php echo esc($ctx['period_id'] ?? ''); ?></strong>
+                        &nbsp;|&nbsp; Dönem: <strong><?php echo esc($ctx['PERIOD01T_id'] ?? ($ctx['period_id'] ?? '')); ?></strong>
                       </div>
                     </div>
                   </div>
@@ -252,27 +272,61 @@ require_once __DIR__ . '/../app/views/layout/header.php';
 
                             $user = $c['username'] ?? '';
                             $sess = $c['session_id'] ?? '';
-
                             $isMine = ($sess !== '' && ($ctx['session_id'] ?? session_id()) === $sess);
 
                             $t = $l['target'] ?? [];
                             if ($t instanceof MongoDB\Model\BSONDocument) $t = $t->getArrayCopy();
 
-                            $tModule = $t['module'] ?? '';
-                            $tDocType = $t['doc_type'] ?? '';
-                            $tDocId = $t['doc_id'] ?? '';
-                            $tDocNo = $t['doc_no'] ?? '';
-                            $tTitle = $t['doc_title'] ?? '';
+                            // ---- tolerate broken/legacy target ---
+                            $tModule  = (string)($t['module'] ?? '');
+                            $tDocType = (string)($t['doc_type'] ?? '');
+                            $tDocId   = (string)($t['doc_id'] ?? '');
 
+                            // Eğer target boş ama target_key içinde doc_id varsa yakala
                             $targetKey = (string)($l['target_key'] ?? '');
+                            if ($tDocId === '' && preg_match('/\|([a-f0-9]{24})\|/i', $targetKey, $m)) {
+                              $tDocId = $m[1];
+                            }
 
-                            $docUrl = doc_url($t);
+                            // doc_type boş ama module SORD01E gibi hatalı yazıldıysa toparla
+                            if ($tDocType === '' && strtoupper($tModule) === 'SORD01E') {
+                              $tDocType = 'SORD01E';
+                              $tModule = 'salesorder';
+                            }
 
-                            $acqUrl = '/php-mongo-erp/public/api/lock_acquire.php?module=' . rawurlencode($tModule) . '&doc_type=' . rawurlencode($tDocType) . '&doc_id=' . rawurlencode($tDocId);
-                            $relUrl = '/php-mongo-erp/public/api/lock_release.php?module=' . rawurlencode($tModule) . '&doc_type=' . rawurlencode($tDocType) . '&doc_id=' . rawurlencode($tDocId);
+                            $tDocNo = (string)($t['doc_no'] ?? '');
+                            $tTitle = (string)($t['doc_title'] ?? '');
+
+                            // SORD01E meta resolve (doc_no/doc_title boşsa)
+                            if (strtoupper($tDocType) === 'SORD01E' && $tDocId !== '' && ($tDocNo === '' || $tTitle === '')) {
+                              $m = resolve_sord_meta($tDocId);
+                              if ($tDocNo === '') $tDocNo = (string)($m['doc_no'] ?? '');
+                              if ($tTitle === '') $tTitle = (string)($m['doc_title'] ?? '');
+                            }
+
+                            $docUrl = doc_url([
+                              'module' => $tModule,
+                              'doc_type' => $tDocType,
+                              'doc_id' => $tDocId,
+                              'doc_no' => $tDocNo,
+                              'doc_title' => $tTitle,
+                            ]);
+
+                            $acqUrl = '/php-mongo-erp/public/api/lock_acquire.php?module=' . rawurlencode($tModule ?: 'salesorder')
+                                   . '&doc_type=' . rawurlencode($tDocType ?: 'SORD01E')
+                                   . '&doc_id=' . rawurlencode($tDocId);
+                            $relUrl = '/php-mongo-erp/public/api/lock_release.php?module=' . rawurlencode($tModule ?: 'salesorder')
+                                   . '&doc_type=' . rawurlencode($tDocType ?: 'SORD01E')
+                                   . '&doc_id=' . rawurlencode($tDocId);
                             $forceUrl = $relUrl . '&force=1';
                           ?>
-                            <tr data-module="<?php echo esc($tModule); ?>" data-doc-type="<?php echo esc($tDocType); ?>" data-doc-id="<?php echo esc($tDocId); ?>">
+                            <tr
+                              data-module="<?php echo esc($tModule ?: 'salesorder'); ?>"
+                              data-doc-type="<?php echo esc($tDocType ?: 'SORD01E'); ?>"
+                              data-doc-id="<?php echo esc($tDocId); ?>"
+                              data-doc-no="<?php echo esc($tDocNo); ?>"
+                              data-doc-title="<?php echo esc($tTitle); ?>"
+                            >
                               <td><?php echo badge_html($status); ?></td>
 
                               <td class="text-muted" style="font-size:12px;"><?php echo esc(fmt_tr_dt($lockedIso)); ?></td>
@@ -288,8 +342,8 @@ require_once __DIR__ . '/../app/views/layout/header.php';
                               </td>
 
                               <td class="text-muted" style="font-size:12px;">
-                                <div><span class="code"><?php echo esc($tModule); ?></span> / <span class="code"><?php echo esc($tDocType); ?></span></div>
-                                <div>doc_id: <span class="code"><?php echo esc($tDocId); ?></span></div>
+                                <div><span class="code"><?php echo esc($tModule ?: '-'); ?></span> / <span class="code"><?php echo esc($tDocType ?: '-'); ?></span></div>
+                                <div>doc_id: <span class="code"><?php echo esc($tDocId ?: '-'); ?></span></div>
                                 <?php if ($tDocNo !== ''): ?>
                                   <div>doc_no: <span class="code"><?php echo esc($tDocNo); ?></span></div>
                                 <?php endif; ?>
@@ -329,6 +383,7 @@ require_once __DIR__ . '/../app/views/layout/header.php';
                     <ul class="mb-0">
                       <li>“Acquire” aynı session ise TTL yenileyebilir (refresh gibi davranır).</li>
                       <li>“Release” normalde sadece lock sahibi için çalışmalı. Admin için force paramı kullanılır.</li>
+                      <li>SORD01E için doc_no/title boşsa sistem header’dan (evrakno/customer) okur.</li>
                     </ul>
                   </div>
 
@@ -365,13 +420,31 @@ require_once __DIR__ . '/../app/views/layout/header.php';
     return { ok: r.ok, json: j };
   }
 
-  function reloadSoon(){
-    window.location.reload();
+  function reloadSoon(){ window.location.reload(); }
+
+  // ✅ Acquire: doc_no/doc_title otomatik ekle
+  function withMeta(btn){
+    const tr = btn.closest('tr');
+    const base = btn.getAttribute('data-url') || '';
+    if (!base) return '';
+
+    try{
+      const u = new URL(base, window.location.origin);
+      if (tr) {
+        const docNo = (tr.getAttribute('data-doc-no') || '').trim();
+        const docTitle = (tr.getAttribute('data-doc-title') || '').trim();
+        if (docNo) u.searchParams.set('doc_no', docNo);
+        if (docTitle) u.searchParams.set('doc_title', docTitle);
+      }
+      return u.toString();
+    }catch(e){
+      return base;
+    }
   }
 
   document.querySelectorAll('.js-acquire').forEach(btn => {
     btn.addEventListener('click', async () => {
-      const url = btn.getAttribute('data-url');
+      const url = withMeta(btn);
       if (!url) return;
 
       btn.disabled = true;

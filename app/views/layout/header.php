@@ -1,4 +1,5 @@
 <?php
+$ASSET_BASE = '/php-mongo-erp/public'; // ✅ tüm sayfalarda sabit kök
 // ✅ en üstte, HTML basmadan önce:
 require_once __DIR__ . '../../../../core/auth/SessionManager.php';
 SessionManager::start(); // ✅ session önce
@@ -41,7 +42,7 @@ if (!function_exists('h')) {
 
     <meta name="description" content="" />
 
-    <link rel="icon" type="image/x-icon" href="theme/assets/img/favicon/favicon.ico" />
+    <link rel="icon" type="image/x-icon" href="<?php echo $ASSET_BASE; ?>/theme/assets/img/favicon/favicon.ico" />
 
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
@@ -49,21 +50,21 @@ if (!function_exists('h')) {
       href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&ampdisplay=swap"
       rel="stylesheet" />
 
-    <link rel="stylesheet" href="theme/assets/vendor/fonts/iconify-icons.css" />
+    <link rel="stylesheet" href="<?php echo $ASSET_BASE; ?>/theme/assets/vendor/fonts/iconify-icons.css" />
 
-    <link rel="stylesheet" href="theme/assets/vendor/libs/node-waves/node-waves.css" />
-    <link rel="stylesheet" href="theme/assets/vendor/libs/pickr/pickr-themes.css" />
-    <link rel="stylesheet" href="theme/assets/vendor/css/core.css" />
-    <link rel="stylesheet" href="theme/assets/css/demo.css" />
-    <link rel="stylesheet" href="theme/assets/vendor/libs/perfect-scrollbar/perfect-scrollbar.css" />
+    <link rel="stylesheet" href="<?php echo $ASSET_BASE; ?>/theme/assets/vendor/libs/node-waves/node-waves.css" />
+    <link rel="stylesheet" href="<?php echo $ASSET_BASE; ?>/theme/assets/vendor/libs/pickr/pickr-themes.css" />
+    <link rel="stylesheet" href="<?php echo $ASSET_BASE; ?>/theme/assets/vendor/css/core.css" />
+    <link rel="stylesheet" href="<?php echo $ASSET_BASE; ?>/theme/assets/css/demo.css" />
+    <link rel="stylesheet" href="<?php echo $ASSET_BASE; ?>/theme/assets/vendor/libs/perfect-scrollbar/perfect-scrollbar.css" />
 
-    <link rel="stylesheet" href="theme/assets/vendor/libs/apex-charts/apex-charts.css" />
-    <link rel="stylesheet" href="theme/assets/vendor/libs/swiper/swiper.css" />
-    <link rel="stylesheet" href="theme/assets/vendor/css/pages/cards-statistics.css" />
+    <link rel="stylesheet" href="<?php echo $ASSET_BASE; ?>/theme/assets/vendor/libs/apex-charts/apex-charts.css" />
+    <link rel="stylesheet" href="<?php echo $ASSET_BASE; ?>/theme/assets/vendor/libs/swiper/swiper.css" />
+    <link rel="stylesheet" href="<?php echo $ASSET_BASE; ?>/theme/assets/vendor/css/pages/cards-statistics.css" />
 
-    <script src="theme/assets/vendor/js/helpers.js"></script>
-    <script src="theme/assets/vendor/js/template-customizer.js"></script>
-    <script src="theme/assets/js/config.js"></script>
+    <script src="<?php echo $ASSET_BASE; ?>/theme/assets/vendor/js/helpers.js"></script>
+    <script src="<?php echo $ASSET_BASE; ?>/theme/assets/vendor/js/template-customizer.js"></script>
+    <script src="<?php echo $ASSET_BASE; ?>/theme/assets/js/config.js"></script>
 
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/flag-icon-css/7.5.0/css/flag-icons.min.css" />
   </head>

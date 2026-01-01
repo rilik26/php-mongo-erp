@@ -1,27 +1,24 @@
 <?php
 /**
- * core/action/ActionLogger.php
+ * core/action/ActionLogger.php (FINAL)
  *
- * LOG STANDARD (V1 - FINAL)
- * - action_code: string (örn AUTH.LOGIN, PERM.DENY, I18N.ADMIN.VIEW)
+ * LOG STANDARD (V1)
+ * - action_code: string
  * - result: success|fail|deny|info
  * - context: user/company/period/facility/session
  * - target: doc target (module/doc_type/doc_id/doc_no/doc_date)
  * - meta: client info (ip, user_agent, request_id)
  * - payload: any extra details
  *
- * Geriye uyumluluk:
- * - Üst seviyede UDEF01_id, username, CDEF01_id, period_id, role, session_id alanları da tutulur.
+ * ✅ FINAL:
+ * - UACT01E (audit) + EVENT01E (timeline) birlikte yazılır
+ * - EVENT01E.refs.log_id = UACT01E insertedId
  */
 
 use MongoDB\BSON\UTCDateTime;
 
 final class ActionLogger
 {
-    /**
-     * Ana log metodu
-     * @return string insertedId
-     */
     public static function log(
         string $actionCode,
         array $payload = [],
@@ -30,16 +27,13 @@ final class ActionLogger
         string $result = 'info',
         array $metaOverride = []
     ): string {
-        // Context topla
         $context = self::resolveContext();
 
-        // Override + whitelist
         if (!empty($overrideContext)) {
             $context = array_merge($context, $overrideContext);
             $context = self::normalizeContext($context);
         }
 
-        // Meta
         $meta = [
             'ip'         => $_SERVER['REMOTE_ADDR'] ?? null,
             'user_agent' => $_SERVER['HTTP_USER_AGENT'] ?? null,
@@ -49,13 +43,15 @@ final class ActionLogger
             $meta = array_merge($meta, $metaOverride);
         }
 
-        // Target normalize
         $target = self::normalizeTarget($target);
 
+        $now = new UTCDateTime();
+
+        // --- UACT01E (audit) ---
         $doc = [
             'action_code' => $actionCode,
             'result'      => $result,
-            'created_at'  => new UTCDateTime(),
+            'created_at'  => $now,
 
             'context'     => $context,
             'target'      => $target ?: null,
@@ -77,7 +73,52 @@ final class ActionLogger
         ];
 
         $res = MongoManager::collection('UACT01E')->insertOne($doc);
-        return (string)$res->getInsertedId();
+        $logId = (string)$res->getInsertedId();
+
+        // --- EVENT01E (timeline) ---
+        // timeline.php bu koleksiyonu okuyor
+        try {
+            $summary = null;
+
+            // kullanıcı payload içinde summary gönderirse onu aynen kullan
+            if (isset($payload['summary']) && is_array($payload['summary'])) {
+                $summary = $payload['summary'];
+            } else {
+                // default summary üret
+                $summary = [
+                    'result' => $result,
+                ];
+                if (!empty($target['doc_no']))   $summary['doc_no'] = (string)$target['doc_no'];
+                if (!empty($target['doc_id']))   $summary['doc_id'] = (string)$target['doc_id'];
+                if (!empty($target['doc_type'])) $summary['doc_type'] = (string)$target['doc_type'];
+                if (!empty($target['module']))   $summary['module'] = (string)$target['module'];
+            }
+
+            $eventDoc = [
+                'event_code' => $actionCode,
+                'created_at' => $now,
+
+                'context' => $context,
+                'target'  => $target ?: null,
+
+                'refs' => [
+                    'log_id'     => $logId,
+                    'request_id' => $meta['request_id'] ?? null,
+                ],
+
+                // timeline UI: data.summary bekliyor
+                'data' => [
+                    'summary' => $summary,
+                    'payload' => $payload, // debug için; istersen sonra kural koyarız
+                ],
+            ];
+
+            MongoManager::collection('EVENT01E')->insertOne($eventDoc);
+        } catch (Throwable $e) {
+            // timeline insert fail olsa da audit log kaydı bozulmasın
+        }
+
+        return $logId;
     }
 
     public static function info(string $actionCode, array $payload = [], array $ctx = [], array $target = []): string
@@ -138,6 +179,8 @@ final class ActionLogger
         if (isset($t['doc_id']))   $out['doc_id']   = (string)$t['doc_id'];
         if (isset($t['doc_no']))   $out['doc_no']   = (string)$t['doc_no'];
         if (isset($t['doc_date'])) $out['doc_date'] = $t['doc_date'];
+        if (isset($t['doc_title'])) $out['doc_title'] = (string)$t['doc_title']; // ✅ ek fayda
+        if (isset($t['status']))    $out['status']    = (string)$t['status'];    // ✅ ek fayda
 
         return $out;
     }

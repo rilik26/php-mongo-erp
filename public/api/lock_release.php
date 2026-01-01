@@ -1,6 +1,6 @@
 <?php
 /**
- * public/api/lock_release.php
+ * public/api/lock_release.php (FINAL)
  * GET:
  *  ?module=...&doc_type=...&doc_id=...
  *  &force=1 (admin)

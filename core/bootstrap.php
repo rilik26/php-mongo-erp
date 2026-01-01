@@ -46,3 +46,5 @@ if (!defined('SKIP_I18N_BOOT')) {
 }
 
 require_once __DIR__ . '/helpers/html.php';
+
+define('BASE_PATH', realpath(__DIR__ . '/..'));

@@ -1,6 +1,7 @@
 <?php
 /**
- * public/api/lock_acquire.php
+ * public/api/lock_acquire.php (FINAL)
+ *
  * GET:
  *  ?module=...&doc_type=...&doc_id=...
  *  &status=editing|viewing|approving
@@ -26,22 +27,17 @@ function j($a, int $code = 200): void {
   exit;
 }
 
-/**
- * Fatal/Warn/Notice yakala → JSON'a çevir
- */
+/** Fatal/Warn/Notice -> JSON */
 ini_set('display_errors', '0');
 error_reporting(E_ALL);
 
 set_error_handler(function($severity, $message, $file, $line) {
-  // Notice/warning gibi şeyler HTML basmasın, JSON dönelim
   throw new ErrorException($message, 0, $severity, $file, $line);
 });
 
 register_shutdown_function(function() {
   $e = error_get_last();
   if (!$e) return;
-
-  // Eğer zaten response yazıldıysa dokunma
   if (headers_sent()) return;
 
   header('Content-Type: application/json; charset=utf-8');
@@ -63,9 +59,7 @@ try {
     if (class_exists('Context') && isset($_SESSION['context']) && is_array($_SESSION['context'])) {
       Context::bootFromSession();
     }
-  } catch (Throwable $e) {
-    // önemli değil; LockManager yine çalışabilir
-  }
+  } catch (Throwable $e) {}
 
   $module  = trim((string)($_GET['module'] ?? ''));
   $docType = trim((string)($_GET['doc_type'] ?? ''));
@@ -82,8 +76,25 @@ try {
   if ($ttl < 60) $ttl = 60;
   if ($ttl > 7200) $ttl = 7200;
 
-  $docNo = trim((string)($_GET['doc_no'] ?? ''));
+  $docNo    = trim((string)($_GET['doc_no'] ?? ''));
   $docTitle = trim((string)($_GET['doc_title'] ?? ''));
+
+  // ✅ SORD01E için doc_no/doc_title otomatik doldur (gelmezse)
+  if (($docNo === '' || $docTitle === '') && strtoupper($docType) === 'SORD01E' && strlen($docId) === 24) {
+    try {
+      $hdr = MongoManager::collection('SORD01E')->findOne(
+        ['_id' => new MongoDB\BSON\ObjectId($docId)],
+        ['projection' => ['evrakno'=>1,'customer'=>1]]
+      );
+      if ($hdr instanceof MongoDB\Model\BSONDocument) $hdr = $hdr->getArrayCopy();
+      if (is_array($hdr)) {
+        if ($docNo === '') $docNo = (string)($hdr['evrakno'] ?? '');
+        if ($docTitle === '') $docTitle = (string)($hdr['customer'] ?? '');
+      }
+    } catch (Throwable $e) {
+      // dolduramazsa problem değil; LockManager yine lock alır
+    }
+  }
 
   $res = LockManager::acquire([
     'module' => $module,

@@ -39,6 +39,11 @@ return [
     'SORD01E',
     'SORD01T',
     'WEBHOOK01E',
+    'COUNTER01E',
+    'SEQ01E',
+    'TIMELINE01T',
+    'SEQ01T',
+    'SNAPSHOT01T',
     
 
 ];

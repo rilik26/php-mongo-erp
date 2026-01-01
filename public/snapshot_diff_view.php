@@ -146,14 +146,37 @@ if (!$snap) {
   exit;
 }
 
-$prevId = (string)($snap['prev_snapshot_id'] ?? '');
-$prevSnap = $prevId ? find_snapshot_by_id($prevId) : null;
+/**
+ * =========================
+ * FIX: prev_snapshot_id nerede?
+ *  - yeni şema: $snap['refs']['prev_snapshot_id']
+ *  - eski şema: $snap['prev_snapshot_id']
+ * =========================
+ */
+$prevId = '';
+if (!empty($snap['refs']) && is_array($snap['refs']) && !empty($snap['refs']['prev_snapshot_id'])) {
+  $prevId = (string)$snap['refs']['prev_snapshot_id'];
+} elseif (!empty($snap['prev_snapshot_id'])) {
+  $prevId = (string)$snap['prev_snapshot_id'];
+}
 
 $targetKey = (string)($snap['target_key'] ?? '');
 $ver = (int)($snap['version'] ?? 0);
 
 $prevByVer = ($targetKey && $ver > 1) ? find_snapshot_by_target_version($targetKey, $ver - 1) : null;
 $nextByVer = ($targetKey && $ver > 0) ? find_snapshot_by_target_version($targetKey, $ver + 1) : null;
+
+/**
+ * FIX: prevSnap seçimi
+ * - önce prevId ile bul
+ * - yoksa version-1 snapshot'u prev olarak kullan
+ */
+$prevSnap = null;
+if ($prevId) $prevSnap = find_snapshot_by_id($prevId);
+if (!$prevSnap && $prevByVer) {
+  $prevSnap = $prevByVer;
+  if (!empty($prevByVer['_id'])) $prevId = (string)$prevByVer['_id'];
+}
 
 $oldData = $prevSnap['data'] ?? [];
 $newData = $snap['data'] ?? [];
@@ -234,13 +257,13 @@ require_once __DIR__ . '/../app/views/layout/header.php';
               <a class="diff-btn" href="/php-mongo-erp/public/timeline.php">← Timeline</a>
 
               <?php if ($prevByVer && !empty($prevByVer['_id'])): ?>
-                <a class="diff-btn" href="/php-mongo-erp/public/snapshot_diff_view.php?snapshot_id=<?php echo esc($prevByVer['_id']); ?>">← Önceki Diff</a>
+                <a class="diff-btn" href="/php-mongo-erp/public/snapshot_diff_view.php?snapshot_id=<?php echo esc((string)$prevByVer['_id']); ?>">← Önceki Diff</a>
               <?php else: ?>
                 <span class="diff-btn diff-btn-dim">← Önceki Diff</span>
               <?php endif; ?>
 
               <?php if ($nextByVer && !empty($nextByVer['_id'])): ?>
-                <a class="diff-btn" href="/php-mongo-erp/public/snapshot_diff_view.php?snapshot_id=<?php echo esc($nextByVer['_id']); ?>">Sonraki Diff →</a>
+                <a class="diff-btn" href="/php-mongo-erp/public/snapshot_diff_view.php?snapshot_id=<?php echo esc((string)$nextByVer['_id']); ?>">Sonraki Diff →</a>
               <?php else: ?>
                 <span class="diff-btn diff-btn-dim">Sonraki Diff →</span>
               <?php endif; ?>

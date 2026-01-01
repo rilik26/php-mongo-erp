@@ -1,6 +1,6 @@
  <aside id="layout-menu" class="layout-menu menu-vertical menu">
           <div class="app-brand demo">
-            <a href="index.php" class="app-brand-link">
+            <a href="<?php echo $ASSET_BASE; ?>/index.php" class="app-brand-link">
               <span class="app-brand-logo demo">
                 <span class="text-primary">
                   <svg width="32" height="18" viewBox="0 0 38 20" fill="none" xmlns="http://www.w3.org/2000/svg">
@@ -80,29 +80,29 @@
                   </a>
                   <ul class="menu-sub">
                     <li class="menu-item">
-                      <a href="lang_admin.php" class="menu-link">
+                      <a href="<?php echo $ASSET_BASE; ?>/lang_admin.php" class="menu-link">
                         <div><?php _e('system.menu.language.manager'); ?></div>
                       </a>
                     </li>
                   </ul>
                 </li>
                 <li class="menu-item">
-                  <a href="approval.php" class="menu-link">
+                  <a href="<?php echo $ASSET_BASE; ?>/approval.php" class="menu-link">
                     <div>Approval</div>
                   </a>
                 </li>
                 <li class="menu-item">
-                  <a href="audit_view.php" class="menu-link">
+                  <a href="<?php echo $ASSET_BASE; ?>/audit_view.php" class="menu-link">
                     <div>Audit View</div>
                   </a>
                 </li>
                 <li class="menu-item">
-                  <a href="change_period.php" class="menu-link">
+                  <a href="<?php echo $ASSET_BASE; ?>/change_period.php" class="menu-link">
                     <div>Change Period</div>
                   </a>
                 </li>
                 <li class="menu-item">
-                  <a href="docs.php" class="menu-link">
+                  <a href="<?php echo $ASSET_BASE; ?>/docs.php" class="menu-link">
                     <div>Docs</div>
                   </a>
                 </li>
@@ -112,32 +112,32 @@
                   </a>
                 </li>
                 <li class="menu-item">
-                  <a href="gendoc_list.php" class="menu-link">
+                  <a href="<?php echo $ASSET_BASE; ?>/gendoc_list.php" class="menu-link">
                     <div>Gendoc List</div>
                   </a>
                 </li>
                 <li class="menu-item">
-                  <a href="locks.php" class="menu-link">
+                  <a href="<?php echo $ASSET_BASE; ?>/locks.php" class="menu-link">
                     <div>Locks</div>
                   </a>
                 </li>
                 <li class="menu-item">
-                  <a href="log_get_view.php" class="menu-link">
+                  <a href="<?php echo $ASSET_BASE; ?>/log_get_view.php" class="menu-link">
                     <div>Log Get View</div>
                   </a>
                 </li>
                 <li class="menu-item">
-                  <a href="log_view.php" class="menu-link">
+                  <a href="<?php echo $ASSET_BASE; ?>/log_view.php" class="menu-link">
                     <div>Log View</div>
                   </a>
                 </li>
                 <li class="menu-item">
-                  <a href="snapshot_diff_view.php" class="menu-link">
+                  <a href="<?php echo $ASSET_BASE; ?>/snapshot_diff_view.php" class="menu-link">
                     <div>Snapshot Diff View</div>
                   </a>
                 </li>
                 <li class="menu-item">
-                  <a href="snapshot_get_view.php" class="menu-link">
+                  <a href="<?php echo $ASSET_BASE; ?>/snapshot_get_view.php" class="menu-link">
                     <div>Snapshot Get View</div>
                   </a>
                 </li>
@@ -147,7 +147,7 @@
                   </a>
                 </li>
                 <li class="menu-item">
-                  <a href="timeline.php" class="menu-link">
+                  <a href="<?php echo $ASSET_BASE; ?>/timeline.php" class="menu-link">
                     <div>Timeline</div>
                   </a>
                 </li>
@@ -162,13 +162,13 @@
             <li class="menu-item">
               <a href="javascript:void(0);" class="menu-link menu-toggle">
                 <i class="menu-icon icon-base ri ri-layout-2-line"></i>
-                <div data-i18n="Layouts">Layouts</div>
+                <div >Satış</div>
               </a>
 
               <ul class="menu-sub">
                 <li class="menu-item">
-                  <a href="layouts-collapsed-menu.html" class="menu-link">
-                    <div data-i18n="Collapsed menu">Collapsed menu</div>
+                  <a href="<?php echo $ASSET_BASE; ?>/salesorder/index.php" class="menu-link">
+                    <div >Satış Siparişi</div>
                   </a>
                 </li>
                 <li class="menu-item">
