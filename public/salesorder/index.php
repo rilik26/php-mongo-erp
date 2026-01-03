@@ -1,7 +1,12 @@
 <?php
+/**
+ * public/salesorder/index.php (FINAL - THEME)
+ */
+
 require_once __DIR__ . '/../../core/bootstrap.php';
 require_once __DIR__ . '/../../core/auth/SessionManager.php';
 require_once __DIR__ . '/../../core/base/Context.php';
+
 require_once __DIR__ . '/../../app/modules/salesorder/SORDRepository.php';
 
 SessionManager::start();
@@ -25,9 +30,12 @@ require_once BASE_PATH . '/app/views/layout/header.php';
       <div class="content-wrapper">
         <div class="container-xxl flex-grow-1 container-p-y">
 
-          <div class="d-flex justify-content-between align-items-center mb-3">
+          <div class="d-flex justify-content-between align-items-center mb-3 flex-wrap gap-2">
             <h4 class="mb-0">Satış Siparişleri</h4>
-            <a class="btn btn-primary" href="/php-mongo-erp/public/salesorder/edit.php">Yeni</a>
+            <div class="d-flex gap-2">
+              <a class="btn btn-outline-primary" href="/php-mongo-erp/public/locks.php">Locks</a>
+              <a class="btn btn-primary" href="/php-mongo-erp/public/salesorder/edit.php">Yeni</a>
+            </div>
           </div>
 
           <div class="card">
@@ -39,21 +47,32 @@ require_once BASE_PATH . '/app/views/layout/header.php';
                     <th>Müşteri</th>
                     <th>Durum</th>
                     <th>Versiyon</th>
-                    <th></th>
+                    <th class="text-end"></th>
                   </tr>
                 </thead>
                 <tbody>
                 <?php foreach ($rows as $r): ?>
+                  <?php
+                    $id = (string)($r['_id'] ?? '');
+                    $docNo = (string)($r['evrakno'] ?? '');
+                    $docTitle = (string)($r['customer'] ?? '');
+                    $status = (string)($r['status'] ?? '');
+                    $ver = (string)($r['version'] ?? '');
+                    $tlUrl = '/php-mongo-erp/public/timeline.php?module=salesorder&doc_type=SORD01E&doc_id=' . rawurlencode($id);
+                  ?>
                   <tr>
-                    <td><?php echo h($r['evrakno']); ?></td>
-                    <td><?php echo h($r['customer']); ?></td>
-                    <td><?php echo h($r['status']); ?></td>
-                    <td><?php echo h($r['version']); ?></td>
+                    <td><?php echo h($docNo); ?></td>
+                    <td><?php echo h($docTitle); ?></td>
+                    <td><?php echo h($status); ?></td>
+                    <td><?php echo h($ver); ?></td>
                     <td class="text-end">
-                      <a class="btn btn-sm btn-outline-primary"
-                         href="/php-mongo-erp/public/salesorder/edit.php?id=<?php echo h($r['_id']); ?>">
-                         Aç
-                      </a>
+                      <div class="d-inline-flex gap-2">
+                        <a class="btn btn-sm btn-outline-secondary" target="_blank" href="<?php echo h($tlUrl); ?>">Timeline</a>
+                        <a class="btn btn-sm btn-outline-primary"
+                           href="/php-mongo-erp/public/salesorder/edit.php?id=<?php echo h($id); ?>">
+                           Aç
+                        </a>
+                      </div>
                     </td>
                   </tr>
                 <?php endforeach; ?>

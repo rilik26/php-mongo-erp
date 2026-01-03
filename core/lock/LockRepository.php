@@ -1,6 +1,6 @@
 <?php
 /**
- * core/lock/LockRepository.php
+ * core/lock/LockRepository.php (FINAL)
  *
  * LOCK01E
  * - target_key unique
@@ -11,6 +11,11 @@
  * 2) aktif ve başkasında -> acquired=false dön
  * 3) aktif ve bende -> TTL refresh/update -> acquired=true
  * 4) yok veya expired -> expired ise delete -> insert new -> acquired=true
+ *
+ * Notlar:
+ * - cleanNulls recursive
+ * - bsonToArray recursive
+ * - release: force değilse sadece owner session bırakabilir
  */
 
 use MongoDB\BSON\UTCDateTime;
@@ -26,15 +31,21 @@ final class LockRepository
         return self::bsonToArray($doc);
     }
 
-    public static function acquire(string $targetKey, array $target, array $context, int $ttlSec = 900, string $status = 'editing'): array
+    public static function acquire(
+        string $targetKey,
+        array $target,
+        array $context,
+        int $ttlSec = 900,
+        string $status = 'editing'
+    ): array
     {
-        $nowMs = (int) floor(microtime(true) * 1000);
+        $nowMs  = (int) floor(microtime(true) * 1000);
         $nowUtc = new UTCDateTime($nowMs);
 
         if ($ttlSec < 60) $ttlSec = 60;
         if ($ttlSec > 7200) $ttlSec = 7200;
 
-        $expiresMs = $nowMs + ($ttlSec * 1000);
+        $expiresMs  = $nowMs + ($ttlSec * 1000);
         $expiresUtc = new UTCDateTime($expiresMs);
 
         // 1) mevcut lock
@@ -45,11 +56,11 @@ final class LockRepository
 
         // aktif mi?
         $existingActive = false;
-        $existingExpMs = null;
+        $existingExpMs  = null;
 
         if ($existing && isset($existing['expires_at'])) {
             if ($existing['expires_at'] instanceof UTCDateTime) {
-                $existingExpMs = (int)$existing['expires_at']->toDateTime()->format('U') * 1000;
+                $existingExpMs = (int) $existing['expires_at']->toDateTime()->format('U') * 1000;
             } else {
                 $ts = strtotime((string)$existing['expires_at']);
                 if ($ts !== false) $existingExpMs = $ts * 1000;
@@ -59,7 +70,7 @@ final class LockRepository
             }
         }
 
-        $mySession = (string)($context['session_id'] ?? '');
+        $mySession   = (string)($context['session_id'] ?? '');
         $lockSession = (string)($existingArr['context']['session_id'] ?? '');
 
         // 2) aktif ve başkasında
@@ -100,7 +111,7 @@ final class LockRepository
             MongoManager::collection('LOCK01E')->deleteOne(['_id' => $existing['_id']]);
         }
 
-        // 5) insert new (unique key çakışmaz, çünkü yok/expired sildik)
+        // 5) insert new
         $doc = [
             'target_key' => $targetKey,
             'target'     => self::cleanNulls($target),
@@ -134,7 +145,7 @@ final class LockRepository
         if ($existing instanceof MongoDB\Model\BSONDocument) $existing = $existing->getArrayCopy();
         $existingArr = self::bsonToArray($existing);
 
-        $mySession = (string)($context['session_id'] ?? '');
+        $mySession   = (string)($context['session_id'] ?? '');
         $lockSession = (string)($existingArr['context']['session_id'] ?? '');
 
         if (!$force && $mySession !== '' && $lockSession !== '' && $mySession !== $lockSession) {
@@ -149,8 +160,13 @@ final class LockRepository
     private static function cleanNulls(array $a): array
     {
         foreach ($a as $k => $v) {
-            if ($v === null) unset($a[$k]);
-            if (is_array($v)) $a[$k] = self::cleanNulls($v);
+            if ($v === null) {
+                unset($a[$k]);
+                continue;
+            }
+            if (is_array($v)) {
+                $a[$k] = self::cleanNulls($v);
+            }
         }
         return $a;
     }

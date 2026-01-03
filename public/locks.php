@@ -3,10 +3,19 @@
  * public/locks.php (FINAL)
  *
  * - Aktif lockları listeler
- * - status badge
+ * - status badge (editing/viewing/approving)
  * - doc_no / doc_title alanlarını UI’da gösterir
  * - Acquire/Release fetch + toast
- * - SORD01E için doc_no/doc_title boşsa SORD01E koleksiyonundan resolve eder
+ * - SORD01E için doc_no/doc_title/status boşsa SORD01E koleksiyonundan resolve eder
+ * - Acquire (editing) + Approve Lock (approving)
+ * - Force release: admin only
+ *
+ * FIX:
+ * - Checkbox filtreleri unchecked olsa da değer gönderir (hidden input ile)
+ *
+ * NEW:
+ * - ✅ approving lock satırı highlight
+ * - ✅ approving lock için "APPROVE PENDING" chip
  */
 
 require_once __DIR__ . '/../core/bootstrap.php';
@@ -27,7 +36,7 @@ catch (ContextException $e) {
 }
 
 $ctx = Context::get();
-$isAdmin = (($ctx['role'] ?? '') === 'admin');
+$isAdmin = ((string)($ctx['role'] ?? '') === 'admin');
 
 ActionLogger::info('LOCKS.VIEW', ['source' => 'public/locks.php'], $ctx);
 
@@ -54,27 +63,26 @@ function badge_html(string $status): string {
   return '<span style="display:inline-block;padding:3px 8px;border-radius:999px;font-size:12px;background:' . $bg . ';color:' . $fg . ';font-weight:600;">' . $label . '</span>';
 }
 
-/**
- * Evraka git URL resolver
- * - salesorder/SORD01E => salesorder/edit.php?id=...
- * - gendoc => gendoc_edit.php?id=...
- * - i18n => lang_admin.php
- */
+function chip_html(string $label, string $value): string {
+  $label = esc($label);
+  $value = esc($value);
+  return '<span style="display:inline-block;padding:2px 8px;border-radius:999px;font-size:12px;background:rgba(0,0,0,.03);border:1px solid rgba(0,0,0,.10);margin-right:6px;margin-top:4px;"><b>' . $label . ':</b> ' . $value . '</span>';
+}
+
 function doc_url(array $t): ?string {
   $module = strtolower((string)($t['module'] ?? ''));
   $dt = strtoupper((string)($t['doc_type'] ?? ''));
   $di = (string)($t['doc_id'] ?? '');
 
-  // tolerate legacy / wrong module: "sord01e" gibi
   if ($di === '' && !empty($t['maybe_doc_id'])) {
     $di = (string)$t['maybe_doc_id'];
   }
 
-  if ($dt === 'SORD01E' && $di !== '') {
+  if ($dt === 'SORD01E' && $di !== '' && strlen($di) === 24) {
     return '/php-mongo-erp/public/salesorder/edit.php?id=' . rawurlencode($di);
   }
 
-  if ($module === 'salesorder' && $dt === 'SORD01E' && $di !== '') {
+  if ($module === 'salesorder' && $dt === 'SORD01E' && $di !== '' && strlen($di) === 24) {
     return '/php-mongo-erp/public/salesorder/edit.php?id=' . rawurlencode($di);
   }
 
@@ -89,12 +97,10 @@ function doc_url(array $t): ?string {
   if ($module !== '' && $dt !== '' && $di !== '') {
     return '/php-mongo-erp/public/timeline.php?module=' . rawurlencode($module) . '&doc_type=' . rawurlencode($dt) . '&doc_id=' . rawurlencode($di);
   }
+
   return null;
 }
 
-/**
- * SORD01E meta resolve (doc_no/doc_title/status)
- */
 function resolve_sord_meta(string $docId): array {
   if ($docId === '' || strlen($docId) !== 24) return ['doc_no'=>'','doc_title'=>'','status'=>''];
 
@@ -108,6 +114,7 @@ function resolve_sord_meta(string $docId): array {
 
   if ($d instanceof MongoDB\Model\BSONDocument) $d = $d->getArrayCopy();
   $h = (array)($d['header'] ?? []);
+
   return [
     'doc_no'    => (string)($h['evrakno'] ?? ''),
     'doc_title' => (string)($h['customer'] ?? ''),
@@ -116,9 +123,11 @@ function resolve_sord_meta(string $docId): array {
 }
 
 // --- filters ---
-$q = trim($_GET['q'] ?? '');
-$onlyMine = (($_GET['mine'] ?? '') === '1');
-$onlyActive = (($_GET['active'] ?? '1') !== '0' && ($_GET['active'] ?? '') !== '');
+$q = trim((string)($_GET['q'] ?? ''));
+
+// Hidden input ile 0 geliyor, checkbox işaretliyse 1 gelir.
+$onlyMine   = ((string)($_GET['mine'] ?? '0') === '1');
+$onlyActive = ((string)($_GET['active'] ?? '1') === '1'); // default: aktif
 
 $nowMs = (int) floor(microtime(true) * 1000);
 
@@ -140,6 +149,7 @@ if ($q !== '') {
     ['target.doc_id' => $regex],
     ['target.doc_no' => $regex],
     ['target.doc_title' => $regex],
+    ['target.doc_status' => $regex],
     ['status' => $regex],
   ];
 }
@@ -162,6 +172,11 @@ require_once __DIR__ . '/../app/views/layout/header.php';
   .code{ font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace; }
   .muted{ color:#888; }
   .small{ font-size:12px; color:#666; }
+
+  /* ✅ approving lock satır vurgusu */
+  tr.lock-approving td{
+    background: rgba(255, 193, 7, .08);
+  }
 </style>
 
 <body>
@@ -196,10 +211,11 @@ require_once __DIR__ . '/../app/views/layout/header.php';
                   <form method="GET" class="row g-3 mt-4" id="filterForm">
                     <div class="col-md-5">
                       <label class="form-label">Search</label>
-                      <input class="form-control" type="text" name="q" value="<?php echo esc($q); ?>" placeholder="user/module/doc_no/doc_title/target_key">
+                      <input class="form-control" type="text" name="q" value="<?php echo esc($q); ?>" placeholder="user/module/doc_no/doc_title/status/target_key">
                     </div>
 
                     <div class="col-md-2 d-flex align-items-end">
+                      <input type="hidden" name="mine" value="0">
                       <div class="form-check">
                         <input class="form-check-input" type="checkbox" id="chkMine" name="mine" value="1" <?php echo $onlyMine ? 'checked' : ''; ?>>
                         <label class="form-check-label" for="chkMine">Sadece benim</label>
@@ -207,6 +223,7 @@ require_once __DIR__ . '/../app/views/layout/header.php';
                     </div>
 
                     <div class="col-md-2 d-flex align-items-end">
+                      <input type="hidden" name="active" value="0">
                       <div class="form-check">
                         <input class="form-check-input" type="checkbox" id="chkActive" name="active" value="1" <?php echo $onlyActive ? 'checked' : ''; ?>>
                         <label class="form-check-label" for="chkActive">Sadece aktif</label>
@@ -227,9 +244,9 @@ require_once __DIR__ . '/../app/views/layout/header.php';
                           <th style="width:170px;">Kilit Zamanı</th>
                           <th style="width:170px;">Bitiş (TTL)</th>
                           <th style="width:170px;">Kullanıcı</th>
-                          <th style="width:320px;">Target</th>
+                          <th style="width:360px;">Target</th>
                           <th>Target Key</th>
-                          <th style="width:260px;">Actions</th>
+                          <th style="width:320px;">Actions</th>
                         </tr>
                       </thead>
                       <tbody>
@@ -242,17 +259,20 @@ require_once __DIR__ . '/../app/views/layout/header.php';
                             $lockedAt = $l['locked_at'] ?? null;
                             $expiresAt = $l['expires_at'] ?? null;
 
-                            $lockedIso = ($lockedAt instanceof MongoDB\BSON\UTCDateTime) ? $lockedAt->toDateTime()->format('c') : (string)$lockedAt;
+                            $lockedIso = ($lockedAt instanceof MongoDB\BSON\UTCDateTime)
+                              ? $lockedAt->toDateTime()->format('c')
+                              : (string)$lockedAt;
 
                             $expiresIso = '';
                             $expiresMs = null;
                             if ($expiresAt instanceof MongoDB\BSON\UTCDateTime) {
-                              $expiresIso = $expiresAt->toDateTime()->format('c');
-                              $expiresMs = (int)$expiresAt->toDateTime()->format('U') * 1000;
+                              $dt = $expiresAt->toDateTime();
+                              $expiresIso = $dt->format('c');
+                              $expiresMs = (int)$dt->getTimestamp() * 1000;
                             } else {
                               $expiresIso = (string)$expiresAt;
                               $tmp = strtotime($expiresIso);
-                              if ($tmp !== false) $expiresMs = $tmp * 1000;
+                              if ($tmp !== false) $expiresMs = (int)$tmp * 1000;
                             }
 
                             $ttlLeft = '';
@@ -277,18 +297,15 @@ require_once __DIR__ . '/../app/views/layout/header.php';
                             $t = $l['target'] ?? [];
                             if ($t instanceof MongoDB\Model\BSONDocument) $t = $t->getArrayCopy();
 
-                            // ---- tolerate broken/legacy target ---
                             $tModule  = (string)($t['module'] ?? '');
                             $tDocType = (string)($t['doc_type'] ?? '');
                             $tDocId   = (string)($t['doc_id'] ?? '');
 
-                            // Eğer target boş ama target_key içinde doc_id varsa yakala
                             $targetKey = (string)($l['target_key'] ?? '');
                             if ($tDocId === '' && preg_match('/\|([a-f0-9]{24})\|/i', $targetKey, $m)) {
                               $tDocId = $m[1];
                             }
 
-                            // doc_type boş ama module SORD01E gibi hatalı yazıldıysa toparla
                             if ($tDocType === '' && strtoupper($tModule) === 'SORD01E') {
                               $tDocType = 'SORD01E';
                               $tModule = 'salesorder';
@@ -296,36 +313,38 @@ require_once __DIR__ . '/../app/views/layout/header.php';
 
                             $tDocNo = (string)($t['doc_no'] ?? '');
                             $tTitle = (string)($t['doc_title'] ?? '');
+                            $tDocStatus = (string)($t['doc_status'] ?? '');
 
-                            // SORD01E meta resolve (doc_no/doc_title boşsa)
-                            if (strtoupper($tDocType) === 'SORD01E' && $tDocId !== '' && ($tDocNo === '' || $tTitle === '')) {
+                            if (strtoupper($tDocType) === 'SORD01E' && $tDocId !== '' && ($tDocNo === '' || $tTitle === '' || $tDocStatus === '')) {
                               $m = resolve_sord_meta($tDocId);
                               if ($tDocNo === '') $tDocNo = (string)($m['doc_no'] ?? '');
                               if ($tTitle === '') $tTitle = (string)($m['doc_title'] ?? '');
+                              if ($tDocStatus === '') $tDocStatus = (string)($m['status'] ?? '');
                             }
 
                             $docUrl = doc_url([
                               'module' => $tModule,
                               'doc_type' => $tDocType,
                               'doc_id' => $tDocId,
-                              'doc_no' => $tDocNo,
-                              'doc_title' => $tTitle,
                             ]);
 
-                            $acqUrl = '/php-mongo-erp/public/api/lock_acquire.php?module=' . rawurlencode($tModule ?: 'salesorder')
+                            $baseAcq = '/php-mongo-erp/public/api/lock_acquire.php?module=' . rawurlencode($tModule ?: 'salesorder')
                                    . '&doc_type=' . rawurlencode($tDocType ?: 'SORD01E')
                                    . '&doc_id=' . rawurlencode($tDocId);
+
+                            $acqEditUrl = $baseAcq . '&status=editing';
+                            $acqApprUrl = $baseAcq . '&status=approving';
+
                             $relUrl = '/php-mongo-erp/public/api/lock_release.php?module=' . rawurlencode($tModule ?: 'salesorder')
                                    . '&doc_type=' . rawurlencode($tDocType ?: 'SORD01E')
                                    . '&doc_id=' . rawurlencode($tDocId);
                             $forceUrl = $relUrl . '&force=1';
                           ?>
                             <tr
-                              data-module="<?php echo esc($tModule ?: 'salesorder'); ?>"
-                              data-doc-type="<?php echo esc($tDocType ?: 'SORD01E'); ?>"
-                              data-doc-id="<?php echo esc($tDocId); ?>"
+                              class="<?php echo ($status === 'approving') ? 'lock-approving' : ''; ?>"
                               data-doc-no="<?php echo esc($tDocNo); ?>"
                               data-doc-title="<?php echo esc($tTitle); ?>"
+                              data-doc-status="<?php echo esc($tDocStatus); ?>"
                             >
                               <td><?php echo badge_html($status); ?></td>
 
@@ -344,11 +363,20 @@ require_once __DIR__ . '/../app/views/layout/header.php';
                               <td class="text-muted" style="font-size:12px;">
                                 <div><span class="code"><?php echo esc($tModule ?: '-'); ?></span> / <span class="code"><?php echo esc($tDocType ?: '-'); ?></span></div>
                                 <div>doc_id: <span class="code"><?php echo esc($tDocId ?: '-'); ?></span></div>
-                                <?php if ($tDocNo !== ''): ?>
-                                  <div>doc_no: <span class="code"><?php echo esc($tDocNo); ?></span></div>
+
+                                <div style="margin-top:6px;">
+                                  <?php if ($tDocNo !== '') echo chip_html('doc_no', $tDocNo); ?>
+                                  <?php if ($tDocStatus !== '') echo chip_html('doc_status', $tDocStatus); ?>
+                                </div>
+
+                                <?php if ($status === 'approving'): ?>
+                                  <div style="margin-top:6px;">
+                                    <?php echo chip_html('lock', 'APPROVE PENDING'); ?>
+                                  </div>
                                 <?php endif; ?>
+
                                 <?php if ($tTitle !== ''): ?>
-                                  <div>title: <?php echo esc($tTitle); ?></div>
+                                  <div style="margin-top:6px;">title: <?php echo esc($tTitle); ?></div>
                                 <?php endif; ?>
                               </td>
 
@@ -361,7 +389,13 @@ require_once __DIR__ . '/../app/views/layout/header.php';
                                   <span class="btn btn-outline-secondary btn-sm disabled">Evraka Git</span>
                                 <?php endif; ?>
 
-                                <button class="btn btn-outline-primary btn-sm js-acquire" type="button" data-url="<?php echo esc($acqUrl); ?>">Acquire</button>
+                                <button class="btn btn-outline-primary btn-sm js-acquire" type="button" data-url="<?php echo esc($acqEditUrl); ?>">
+                                  Acquire
+                                </button>
+
+                                <button class="btn btn-outline-warning btn-sm js-approve" type="button" data-url="<?php echo esc($acqApprUrl); ?>">
+                                  Approve Lock
+                                </button>
 
                                 <?php if ($isMine): ?>
                                   <button class="btn btn-danger btn-sm js-release" type="button" data-url="<?php echo esc($relUrl); ?>">Release</button>
@@ -381,9 +415,9 @@ require_once __DIR__ . '/../app/views/layout/header.php';
                   <div class="text-muted mt-3" style="font-size:12px;">
                     Notlar:
                     <ul class="mb-0">
-                      <li>“Acquire” aynı session ise TTL yenileyebilir (refresh gibi davranır).</li>
-                      <li>“Release” normalde sadece lock sahibi için çalışmalı. Admin için force paramı kullanılır.</li>
-                      <li>SORD01E için doc_no/title boşsa sistem header’dan (evrakno/customer) okur.</li>
+                      <li>Acquire TTL yeniler (aynı session ise refresh gibi).</li>
+                      <li>Approve Lock = status=approving ile lock alır.</li>
+                      <li>SORD01E için doc_no/title/status boşsa header’dan resolve edilir.</li>
                     </ul>
                   </div>
 
@@ -422,7 +456,6 @@ require_once __DIR__ . '/../app/views/layout/header.php';
 
   function reloadSoon(){ window.location.reload(); }
 
-  // ✅ Acquire: doc_no/doc_title otomatik ekle
   function withMeta(btn){
     const tr = btn.closest('tr');
     const base = btn.getAttribute('data-url') || '';
@@ -433,8 +466,10 @@ require_once __DIR__ . '/../app/views/layout/header.php';
       if (tr) {
         const docNo = (tr.getAttribute('data-doc-no') || '').trim();
         const docTitle = (tr.getAttribute('data-doc-title') || '').trim();
+        const docStatus = (tr.getAttribute('data-doc-status') || '').trim();
         if (docNo) u.searchParams.set('doc_no', docNo);
         if (docTitle) u.searchParams.set('doc_title', docTitle);
+        if (docStatus) u.searchParams.set('doc_status', docStatus);
       }
       return u.toString();
     }catch(e){
@@ -460,6 +495,32 @@ require_once __DIR__ . '/../app/views/layout/header.php';
         }
       } catch(e){
         toast('error', 'Acquire exception: ' + e.message);
+      } finally {
+        btn.disabled = false;
+      }
+    });
+  });
+
+  document.querySelectorAll('.js-approve').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      if (!confirm('Approving lock alınsın mı?')) return;
+
+      const url = withMeta(btn);
+      if (!url) return;
+
+      btn.disabled = true;
+      try{
+        const res = await callJson(url);
+        const j = res.json || {};
+        if (!res.ok || !j.ok) {
+          toast('error', 'Approve: ' + (j.error || 'exception'));
+        } else {
+          if (j.acquired) toast('success', 'Approving lock alındı.');
+          else toast('warning', 'Lock başka kullanıcıda: ' + (j.lock?.context?.username || 'unknown'));
+          reloadSoon();
+        }
+      } catch(e){
+        toast('error', 'Approve exception: ' + e.message);
       } finally {
         btn.disabled = false;
       }

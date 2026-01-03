@@ -1,11 +1,16 @@
 <?php
 /**
- * public/api/log_get.php
+ * public/api/log_get.php (FINAL)
  *
  * GET:
  *  - ?log_id=<UACT01E _id>
- *  - &view=1 -> HTML view
+ *  - &view=1 -> redirect to /public/log_view.php?log_id=...
+ *
+ * IMPORTANT:
+ * - Always return JSON (even on warnings/fatal)
  */
+
+declare(strict_types=1);
 
 require_once __DIR__ . '/../../core/bootstrap.php';
 require_once __DIR__ . '/../../core/auth/SessionManager.php';
@@ -18,6 +23,30 @@ function j($a, int $code = 200): void {
   echo json_encode($a, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
   exit;
 }
+
+/** Fatal/Warn/Notice -> JSON */
+ini_set('display_errors', '0');
+error_reporting(E_ALL);
+
+set_error_handler(function($severity, $message, $file, $line) {
+  throw new ErrorException($message, 0, $severity, $file, $line);
+});
+
+register_shutdown_function(function() {
+  $e = error_get_last();
+  if (!$e) return;
+  if (headers_sent()) return;
+
+  header('Content-Type: application/json; charset=utf-8');
+  http_response_code(500);
+  echo json_encode([
+    'ok' => false,
+    'error' => 'fatal_error',
+    'error_detail' => $e['message'] ?? 'unknown',
+    'file' => $e['file'] ?? null,
+    'line' => $e['line'] ?? null,
+  ], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+});
 
 function bson_to_array($v) {
   if ($v instanceof MongoDB\Model\BSONDocument || $v instanceof MongoDB\Model\BSONArray) {
@@ -33,122 +62,44 @@ function bson_to_array($v) {
   return $v;
 }
 
-function esc($s): string {
-  return htmlspecialchars((string)$s, ENT_QUOTES, 'UTF-8');
-}
-
-function fmt_tr($isoOrNull): string {
-  if (!$isoOrNull) return '';
-  try {
-    $dt = new DateTime($isoOrNull, new DateTimeZone('UTC'));
-    $dt->setTimezone(new DateTimeZone('Europe/Istanbul'));
-    return $dt->format('d.m.Y H:i:s');
-  } catch (Throwable $e) {
-    return (string)$isoOrNull;
-  }
-}
-
-$logId = trim($_GET['log_id'] ?? '');
-$view  = (string)($_GET['view'] ?? '') === '1';
-
-if ($logId === '') {
-  if ($view) {
-    http_response_code(400);
-    echo "log_id gerekli";
-    exit;
-  }
-  j(['ok' => false, 'error' => 'log_id_required'], 400);
+function try_oid(string $id): ?MongoDB\BSON\ObjectId {
+  if ($id === '' || strlen($id) !== 24) return null;
+  try { return new MongoDB\BSON\ObjectId($id); }
+  catch (Throwable $e) { return null; }
 }
 
 try {
-  $doc = MongoManager::collection('UACT01E')->findOne(['_id' => new MongoDB\BSON\ObjectId($logId)]);
-} catch (Throwable $e) {
+  $logId = trim((string)($_GET['log_id'] ?? ''));
+  $view  = ((string)($_GET['view'] ?? '') === '1');
+
+  if ($logId === '') {
+    j(['ok' => false, 'error' => 'log_id_required'], 400);
+  }
+
+  // Geriye uyumluluk: view=1 ise theme sayfaya yönlendir
   if ($view) {
-    http_response_code(400);
-    echo "Geçersiz log_id";
+    header('Location: /php-mongo-erp/public/log_view.php?log_id=' . rawurlencode($logId));
     exit;
   }
-  j(['ok'=>false,'error'=>'invalid_log_id'], 400);
-}
 
-if (!$doc) {
-  if ($view) {
-    http_response_code(404);
-    echo "Log bulunamadı";
-    exit;
+  $oid = try_oid($logId);
+  if (!$oid) {
+    j(['ok'=>false,'error'=>'invalid_log_id'], 400);
   }
-  j(['ok'=>false,'error'=>'not_found'], 404);
-}
 
-$log = bson_to_array($doc);
+  $doc = MongoManager::collection('UACT01E')->findOne(['_id' => $oid]);
+  if (!$doc) {
+    j(['ok'=>false,'error'=>'not_found'], 404);
+  }
 
-if (!$view) {
+  $log = bson_to_array($doc);
+
   j(['ok'=>true, 'log'=>$log]);
+
+} catch (Throwable $e) {
+  j([
+    'ok' => false,
+    'error' => 'exception',
+    'error_detail' => $e->getMessage(),
+  ], 500);
 }
-
-// ---- HTML VIEW ----
-header('Content-Type: text/html; charset=utf-8');
-
-$created = fmt_tr($log['created_at'] ?? null);
-$ctx = $log['context'] ?? [];
-$target = $log['target'] ?? null;
-$meta = $log['meta'] ?? [];
-$payload = $log['payload'] ?? [];
-
-?>
-<!doctype html>
-<html>
-<head>
-  <meta charset="utf-8">
-  <title>LOG VIEW</title>
-  <style>
-    body{font-family:Arial,sans-serif;margin:16px;}
-    .card{border:1px solid #eee;border-radius:10px;padding:12px;margin-bottom:12px;}
-    .h{display:flex;gap:10px;flex-wrap:wrap;align-items:center;}
-    .pill{padding:4px 8px;border-radius:999px;background:#f3f3f3;font-size:12px;}
-    pre{background:#0b1020;color:#d7e2ff;padding:10px;border-radius:10px;overflow:auto;}
-    .k{color:#666;font-size:12px;}
-    table{border-collapse:collapse;width:100%;}
-    td{border:1px solid #eee;padding:8px;vertical-align:top;}
-  </style>
-</head>
-<body>
-
-<div class="card">
-  <div class="h">
-    <span class="pill"><strong><?php echo esc($log['action_code'] ?? ''); ?></strong></span>
-    <span class="pill">result: <?php echo esc($log['result'] ?? ''); ?></span>
-    <span class="pill"><?php echo esc($created); ?></span>
-  </div>
-  <div style="margin-top:8px;">
-    <div class="k">Kullanıcı</div>
-    <div><strong><?php echo esc($ctx['username'] ?? $log['username'] ?? ''); ?></strong> (<?php echo esc($ctx['role'] ?? $log['role'] ?? ''); ?>)</div>
-    <div class="k">Firma / Dönem</div>
-    <div><?php echo esc($ctx['CDEF01_id'] ?? $log['CDEF01_id'] ?? ''); ?> / <?php echo esc($ctx['period_id'] ?? $log['period_id'] ?? ''); ?></div>
-  </div>
-</div>
-
-<div class="card">
-  <h3 style="margin:0 0 8px 0;">Context</h3>
-  <pre><?php echo esc(json_encode($ctx, JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES|JSON_PRETTY_PRINT)); ?></pre>
-</div>
-
-<?php if ($target): ?>
-<div class="card">
-  <h3 style="margin:0 0 8px 0;">Target</h3>
-  <pre><?php echo esc(json_encode($target, JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES|JSON_PRETTY_PRINT)); ?></pre>
-</div>
-<?php endif; ?>
-
-<div class="card">
-  <h3 style="margin:0 0 8px 0;">Meta</h3>
-  <pre><?php echo esc(json_encode($meta, JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES|JSON_PRETTY_PRINT)); ?></pre>
-</div>
-
-<div class="card">
-  <h3 style="margin:0 0 8px 0;">Payload</h3>
-  <pre><?php echo esc(json_encode($payload, JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES|JSON_PRETTY_PRINT)); ?></pre>
-</div>
-
-</body>
-</html>

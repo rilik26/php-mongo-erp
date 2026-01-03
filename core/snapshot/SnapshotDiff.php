@@ -7,6 +7,9 @@
  * - summarizeGenericDiff: event summary (generic)
  * - diffLangRows: lang rows özel diff
  * - summarizeLangDiff: event summary (lang)
+ *
+ * ✅ NEW:
+ * - diffSordLinesPaths: SORD01E lines[] için line_no bazlı diff (paths)
  */
 
 final class SnapshotDiff
@@ -104,6 +107,19 @@ final class SnapshotDiff
 
             // array - array
             if (is_array($ov) && is_array($nv)) {
+
+                /**
+                 * ✅ SPECIAL: salesorder lines[] (SORD01E)
+                 * Eğer path ...lines ise, line_no bazlı diff üret.
+                 */
+                if ((string)$k === 'lines') {
+                    $sub = self::diffSordLinesPaths($ov, $nv, $path);
+                    $added = array_merge($added, $sub['added_keys']);
+                    $removed = array_merge($removed, $sub['removed_keys']);
+                    $changed = array_merge($changed, $sub['changed_keys']);
+                    continue;
+                }
+
                 // list compare (numeric arrays) -> compare JSON directly
                 if (self::isList($ov) || self::isList($nv)) {
                     if (!self::sameScalarOrJson($ov, $nv)) {
@@ -256,5 +272,103 @@ final class SnapshotDiff
         $aj = json_encode($a, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
         $bj = json_encode($b, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
         return $aj === $bj;
+    }
+
+    /**
+     * ✅ NEW: SORD01E lines[] diff (flatten paths)
+     *
+     * Beklenen lines formatı:
+     * [
+     *   ['line_no'=>1,'item_name'=>'A','qty'=>1,'price'=>10],
+     *   ...
+     * ]
+     *
+     * Çıktı path örnekleri:
+     * - lines.1 added/removed/changed
+     * - lines.2.qty changed (from/to)
+     */
+    private static function diffSordLinesPaths(array $oldLines, array $newLines, string $prefix): array
+    {
+        $added = [];
+        $removed = [];
+        $changed = [];
+
+        $oldLines = self::normalizeValue($oldLines);
+        $newLines = self::normalizeValue($newLines);
+
+        $oMap = self::linesToMapByLineNo($oldLines);
+        $nMap = self::linesToMapByLineNo($newLines);
+
+        $oKeys = array_keys($oMap);
+        $nKeys = array_keys($nMap);
+
+        // added whole line
+        foreach (array_diff($nKeys, $oKeys) as $ln) {
+            $added[] = self::joinPath($prefix, (string)$ln);
+        }
+
+        // removed whole line
+        foreach (array_diff($oKeys, $nKeys) as $ln) {
+            $removed[] = self::joinPath($prefix, (string)$ln);
+        }
+
+        // changed fields
+        foreach (array_intersect($oKeys, $nKeys) as $ln) {
+            $o = (array)($oMap[$ln] ?? []);
+            $n = (array)($nMap[$ln] ?? []);
+
+            $fields = array_unique(array_merge(array_keys($o), array_keys($n)));
+            foreach ($fields as $f) {
+                if ($f === 'line_no') continue;
+
+                $ov = $o[$f] ?? null;
+                $nv = $n[$f] ?? null;
+
+                if (!self::sameScalarOrJson($ov, $nv)) {
+                    $path = self::joinPath(self::joinPath($prefix, (string)$ln), (string)$f);
+                    $changed[$path] = ['from' => $ov, 'to' => $nv];
+                }
+            }
+        }
+
+        return [
+            'added_keys' => array_values($added),
+            'removed_keys' => array_values($removed),
+            'changed_keys' => $changed,
+        ];
+    }
+
+    /**
+     * lines[] -> [line_no => lineAssoc]
+     * line_no yoksa, index+1 fallback (stabilite için)
+     */
+    private static function linesToMapByLineNo(array $lines): array
+    {
+        $map = [];
+
+        $i = 0;
+        foreach ($lines as $row) {
+            $i++;
+            if (!is_array($row)) continue;
+
+            $ln = $row['line_no'] ?? null;
+            if ($ln === null || $ln === '' || !is_numeric($ln)) {
+                $ln = $i;
+            } else {
+                $ln = (int)$ln;
+            }
+
+            $map[(string)$ln] = $row;
+        }
+
+        // keyleri sayısal sıralamak okunabilirliği artırır (opsiyonel ama stabil)
+        $keys = array_keys($map);
+        usort($keys, function($a, $b){
+            return (int)$a <=> (int)$b;
+        });
+
+        $out = [];
+        foreach ($keys as $k) $out[$k] = $map[$k];
+        return $out;
     }
 }

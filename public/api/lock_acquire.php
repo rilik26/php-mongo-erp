@@ -6,7 +6,7 @@
  *  ?module=...&doc_type=...&doc_id=...
  *  &status=editing|viewing|approving
  *  &ttl=900
- *  &doc_no=...&doc_title=...
+ *  &doc_no=...&doc_title=...&doc_status=...
  *
  * IMPORTANT:
  * - Always return JSON (even on warnings/fatal)
@@ -27,7 +27,6 @@ function j($a, int $code = 200): void {
   exit;
 }
 
-/** Fatal/Warn/Notice -> JSON */
 ini_set('display_errors', '0');
 error_reporting(E_ALL);
 
@@ -54,7 +53,6 @@ register_shutdown_function(function() {
 try {
   SessionManager::start();
 
-  // Context varsa boot et (tenant key düzgün çıksın)
   try {
     if (class_exists('Context') && isset($_SESSION['context']) && is_array($_SESSION['context'])) {
       Context::bootFromSession();
@@ -76,34 +74,37 @@ try {
   if ($ttl < 60) $ttl = 60;
   if ($ttl > 7200) $ttl = 7200;
 
-  $docNo    = trim((string)($_GET['doc_no'] ?? ''));
-  $docTitle = trim((string)($_GET['doc_title'] ?? ''));
+  $docNo     = trim((string)($_GET['doc_no'] ?? ''));
+  $docTitle  = trim((string)($_GET['doc_title'] ?? ''));
+  $docStatus = trim((string)($_GET['doc_status'] ?? ''));
 
-  // ✅ SORD01E için doc_no/doc_title otomatik doldur (gelmezse)
-  if (($docNo === '' || $docTitle === '') && strtoupper($docType) === 'SORD01E' && strlen($docId) === 24) {
+  // ✅ SORD01E için doc_no/doc_title/doc_status otomatik doldur (gelmezse)
+  if ((($docNo === '' || $docTitle === '' || $docStatus === '') && strtoupper($docType) === 'SORD01E' && strlen($docId) === 24)) {
     try {
       $hdr = MongoManager::collection('SORD01E')->findOne(
         ['_id' => new MongoDB\BSON\ObjectId($docId)],
-        ['projection' => ['evrakno'=>1,'customer'=>1]]
+        ['projection' => ['header.evrakno'=>1,'header.customer'=>1,'header.status'=>1]]
       );
       if ($hdr instanceof MongoDB\Model\BSONDocument) $hdr = $hdr->getArrayCopy();
       if (is_array($hdr)) {
-        if ($docNo === '') $docNo = (string)($hdr['evrakno'] ?? '');
-        if ($docTitle === '') $docTitle = (string)($hdr['customer'] ?? '');
+        $h = (array)($hdr['header'] ?? []);
+        if ($docNo === '') $docNo = (string)($h['evrakno'] ?? '');
+        if ($docTitle === '') $docTitle = (string)($h['customer'] ?? '');
+        if ($docStatus === '') $docStatus = (string)($h['status'] ?? '');
       }
-    } catch (Throwable $e) {
-      // dolduramazsa problem değil; LockManager yine lock alır
-    }
+    } catch (Throwable $e) {}
   }
 
-  $res = LockManager::acquire([
+  $target = [
     'module' => $module,
     'doc_type' => $docType,
     'doc_id' => $docId,
-    'doc_no' => $docNo !== '' ? $docNo : null,
-    'doc_title' => $docTitle !== '' ? $docTitle : null,
-  ], $ttl, $status);
+    'doc_no' => ($docNo !== '' ? $docNo : null),
+    'doc_title' => ($docTitle !== '' ? $docTitle : null),
+    'doc_status' => ($docStatus !== '' ? $docStatus : null),
+  ];
 
+  $res = LockManager::acquire($target, $ttl, $status);
   j($res);
 
 } catch (Throwable $e) {

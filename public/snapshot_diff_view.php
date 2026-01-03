@@ -7,8 +7,11 @@
  * - Prev/Next diff navigation (target_key + version)
  * - Lang rows özel detay diff
  * - Genel data için nested diff detaylı render (flatten)
+ * - ✅ FIX: prev_snapshot_id hem refs.prev_snapshot_id hem prev_snapshot_id
+ * - ✅ FIX: snapshot_id ObjectId validate (400)
+ * - ✅ FIX: prev snapshot yoksa güvenli mesaj
  *
- * ✅ Theme Layout: header / left / header2 / footer
+ * Theme Layout: header / left / header2 / footer
  */
 
 require_once __DIR__ . '/../core/bootstrap.php';
@@ -26,18 +29,13 @@ if (!isset($_SESSION['context']) || !is_array($_SESSION['context'])) {
   exit;
 }
 
-try {
-  Context::bootFromSession();
-} catch (ContextException $e) {
+try { Context::bootFromSession(); }
+catch (ContextException $e) {
   header('Location: /php-mongo-erp/public/login.php');
   exit;
 }
 
 $ctx = Context::get();
-
-ActionLogger::info('SNAPSHOT.DIFF.VIEW', [
-  'source' => 'public/snapshot_diff_view.php'
-], $ctx);
 
 function esc($s): string { return htmlspecialchars((string)$s, ENT_QUOTES, 'UTF-8'); }
 
@@ -55,6 +53,12 @@ function bson_to_array($v) {
   return $v;
 }
 
+function try_oid(string $id): ?MongoDB\BSON\ObjectId {
+  if ($id === '' || strlen($id) !== 24) return null;
+  try { return new MongoDB\BSON\ObjectId($id); }
+  catch (Throwable $e) { return null; }
+}
+
 function fmt_tr($iso): string {
   if (!$iso) return '-';
   try {
@@ -67,8 +71,8 @@ function fmt_tr($iso): string {
 }
 
 function find_snapshot_by_id(string $id): ?array {
-  try { $oid = new MongoDB\BSON\ObjectId($id); }
-  catch(Throwable $e){ return null; }
+  $oid = try_oid($id);
+  if (!$oid) return null;
 
   $doc = MongoManager::collection('SNAP01E')->findOne(['_id' => $oid]);
   if (!$doc) return null;
@@ -95,9 +99,7 @@ function safe_json($v): string {
 }
 
 /**
- * Nested diff flatten:
- * changed[field] nested subdiff olabilir.
- * leaf değişiklikleri path listesine açar.
+ * Nested diff flatten
  */
 function flatten_diff_assoc(array $diff, string $prefix = ''): array
 {
@@ -132,12 +134,24 @@ function flatten_diff_assoc(array $diff, string $prefix = ''): array
   return $items;
 }
 
-$snapshotId = trim($_GET['snapshot_id'] ?? '');
+$snapshotId = trim((string)($_GET['snapshot_id'] ?? ''));
 if ($snapshotId === '') {
   http_response_code(400);
   echo "snapshot_id required";
   exit;
 }
+
+// ✅ FIX: snapshot_id ObjectId validate
+if (!try_oid($snapshotId)) {
+  http_response_code(400);
+  echo "snapshot_id_invalid";
+  exit;
+}
+
+ActionLogger::info('SNAPSHOT.DIFF.VIEW', [
+  'source' => 'public/snapshot_diff_view.php',
+  'snapshot_id' => $snapshotId,
+], $ctx);
 
 $snap = find_snapshot_by_id($snapshotId);
 if (!$snap) {
@@ -146,13 +160,7 @@ if (!$snap) {
   exit;
 }
 
-/**
- * =========================
- * FIX: prev_snapshot_id nerede?
- *  - yeni şema: $snap['refs']['prev_snapshot_id']
- *  - eski şema: $snap['prev_snapshot_id']
- * =========================
- */
+// ✅ FIX: prev_snapshot_id nereden?
 $prevId = '';
 if (!empty($snap['refs']) && is_array($snap['refs']) && !empty($snap['refs']['prev_snapshot_id'])) {
   $prevId = (string)$snap['refs']['prev_snapshot_id'];
@@ -166,11 +174,7 @@ $ver = (int)($snap['version'] ?? 0);
 $prevByVer = ($targetKey && $ver > 1) ? find_snapshot_by_target_version($targetKey, $ver - 1) : null;
 $nextByVer = ($targetKey && $ver > 0) ? find_snapshot_by_target_version($targetKey, $ver + 1) : null;
 
-/**
- * FIX: prevSnap seçimi
- * - önce prevId ile bul
- * - yoksa version-1 snapshot'u prev olarak kullan
- */
+// prevSnap seçimi
 $prevSnap = null;
 if ($prevId) $prevSnap = find_snapshot_by_id($prevId);
 if (!$prevSnap && $prevByVer) {
@@ -178,27 +182,31 @@ if (!$prevSnap && $prevByVer) {
   if (!empty($prevByVer['_id'])) $prevId = (string)$prevByVer['_id'];
 }
 
+// prev yoksa: diff yok
 $oldData = $prevSnap['data'] ?? [];
 $newData = $snap['data'] ?? [];
+
 $oldData = is_array($oldData) ? $oldData : bson_to_array($oldData);
 $newData = is_array($newData) ? $newData : bson_to_array($newData);
 
-$isLang = (isset($oldData['rows']) || isset($newData['rows']));
+$isLang = ($prevSnap && (isset($oldData['rows']) || isset($newData['rows'])));
 
 $langDiff = null;
 $genDiff  = null;
 $flat = [];
 
-if ($isLang) {
-  $oldRows = isset($oldData['rows']) ? (array)bson_to_array($oldData['rows']) : [];
-  $newRows = isset($newData['rows']) ? (array)bson_to_array($newData['rows']) : [];
-  $langDiff = SnapshotDiff::diffLangRows($oldRows, $newRows);
-} else {
-  $genDiff = SnapshotDiff::diffAssoc((array)$oldData, (array)$newData);
-  $flat = flatten_diff_assoc($genDiff);
+if ($prevSnap) {
+  if ($isLang) {
+    $oldRows = isset($oldData['rows']) ? (array)bson_to_array($oldData['rows']) : [];
+    $newRows = isset($newData['rows']) ? (array)bson_to_array($newData['rows']) : [];
+    $langDiff = SnapshotDiff::diffLangRows($oldRows, $newRows);
+  } else {
+    $genDiff = SnapshotDiff::diffAssoc((array)$oldData, (array)$newData);
+    $flat = flatten_diff_assoc($genDiff);
+  }
 }
 
-/** ✅ THEME HEAD */
+/** THEME HEAD */
 require_once __DIR__ . '/../app/views/layout/header.php';
 ?>
 <body>
@@ -214,7 +222,6 @@ require_once __DIR__ . '/../app/views/layout/header.php';
         <div class="container-xxl flex-grow-1 container-p-y">
 
           <style>
-            /* sadece bu sayfaya özel “diff görünümü” */
             .diff-wrap{ max-width:1200px; margin:0 auto; }
             .diff-topbar{ display:flex; gap:10px; align-items:center; flex-wrap:wrap; margin-bottom:12px; }
             .diff-btn{
@@ -277,17 +284,18 @@ require_once __DIR__ . '/../app/views/layout/header.php';
             </div>
 
             <div class="diff-h1">
-              Diff (v<?php echo (int)($prevSnap['version'] ?? 0); ?> → v<?php echo (int)$ver; ?>)
+              Diff
+              <?php if ($prevSnap): ?>
+                (v<?php echo (int)($prevSnap['version'] ?? 0); ?> → v<?php echo (int)$ver; ?>)
+              <?php else: ?>
+                (prev yok)
+              <?php endif; ?>
               <span class="diff-code"><?php echo esc($targetKey); ?></span>
             </div>
 
             <div class="diff-muted">
               Current: <span class="diff-code"><?php echo esc($snapshotId); ?></span>
-              <?php if ($prevId): ?>
-                &nbsp;|&nbsp; Prev: <span class="diff-code"><?php echo esc($prevId); ?></span>
-              <?php else: ?>
-                &nbsp;|&nbsp; Prev: -
-              <?php endif; ?>
+              &nbsp;|&nbsp; Prev: <span class="diff-code"><?php echo esc($prevId ?: '-'); ?></span>
             </div>
 
             <div class="diff-grid">
@@ -302,10 +310,14 @@ require_once __DIR__ . '/../app/views/layout/header.php';
 
               <div class="diff-card">
                 <div class="diff-kv">
-                  <div><b>Prev version</b>: v<?php echo (int)($prevSnap['version'] ?? 0); ?></div>
-                  <div><b>Created</b>: <?php echo esc(fmt_tr($prevSnap['created_at'] ?? '')); ?></div>
-                  <div><b>User</b>: <?php echo esc($prevSnap['context']['username'] ?? '-'); ?></div>
-                  <div><b>Hash</b>: <span class="diff-code"><?php echo esc($prevSnap['hash'] ?? '-'); ?></span></div>
+                  <?php if ($prevSnap): ?>
+                    <div><b>Prev version</b>: v<?php echo (int)($prevSnap['version'] ?? 0); ?></div>
+                    <div><b>Created</b>: <?php echo esc(fmt_tr($prevSnap['created_at'] ?? '')); ?></div>
+                    <div><b>User</b>: <?php echo esc($prevSnap['context']['username'] ?? '-'); ?></div>
+                    <div><b>Hash</b>: <span class="diff-code"><?php echo esc($prevSnap['hash'] ?? '-'); ?></span></div>
+                  <?php else: ?>
+                    <div class="diff-small">Prev snapshot bulunamadı (ilk versiyon veya prev zinciri kırık).</div>
+                  <?php endif; ?>
                 </div>
               </div>
             </div>

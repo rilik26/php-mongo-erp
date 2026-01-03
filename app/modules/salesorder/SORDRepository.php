@@ -116,7 +116,7 @@ final class SORDRepository
      * - new => evrakno üretir (refresh’te değil, sadece POST’ta)
      * - version++ (her save)
      * - snapshot (target_key + version unique) + prev_snapshot_id
-     * - EVENT01E: SORD.SAVE
+     * - EVENT01E: SORD.SAVE / SORD.SAVE.APPROVED
      */
     public static function save(array $header, array $lines, array $ctx, ?string $id = null): array
     {
@@ -230,13 +230,18 @@ final class SORDRepository
             ],
         ];
 
-        // ✅ duplicate artık bitmeli: target_key asla null değil
         $snapIns = MongoManager::collection('SNAP01E')->insertOne($snapDoc);
         $snapshotId = (string)$snapIns->getInsertedId();
 
+        // ===== EVENT/LOG CODE (approved ayrımı) =====
+        $isApproved = ($status === 'APPROVED');
+        $actionCode = $isApproved ? 'SORD.SAVE.APPROVED' : 'SORD.SAVE';
+        $eventCode  = $actionCode;
+        $eventTitle = $isApproved ? 'Satış Siparişi: Approve+Kaydet' : 'Satış Siparişi: Kaydet';
+
         // ===== LOG (UACT01E) =====
-        $logId = ActionLogger::success('SORD.SAVE', [
-            'source' => 'SORDRepository::save',
+        $logId = ActionLogger::success($actionCode, [
+            'source'  => 'SORDRepository::save',
             'version' => $newVersion,
         ], $ctx, [
             'module' => 'salesorder',
@@ -247,7 +252,7 @@ final class SORDRepository
 
         // ===== EVENT01E =====
         MongoManager::collection('EVENT01E')->insertOne([
-            'event_code' => 'SORD.SAVE',
+            'event_code' => $eventCode,
             'created_at' => $now,
             'context' => [
                 'CDEF01_id' => $cdef,
@@ -272,7 +277,7 @@ final class SORDRepository
             ],
             'data' => [
                 'summary' => [
-                    'title'   => 'Satış Siparişi: Kaydet',
+                    'title'   => $eventTitle,
                     'version' => $newVersion,
                     'doc_no'  => $evrakno,
                     'status'  => $status,

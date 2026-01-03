@@ -2,6 +2,9 @@
 /**
  * public/log_view.php (FINAL - THEME)
  * HTML wrapper for /public/api/log_get.php?log_id=...
+ *
+ * - log_id required + basic validate (24 char ObjectId)
+ * - Theme layout + JSON render
  */
 
 require_once __DIR__ . '/../core/bootstrap.php';
@@ -15,15 +18,23 @@ if (!isset($_SESSION['context']) || !is_array($_SESSION['context'])) {
   header('Location: /php-mongo-erp/public/login.php');
   exit;
 }
-try { Context::bootFromSession(); } catch (Throwable $e) {
+
+try { Context::bootFromSession(); }
+catch (Throwable $e) {
   header('Location: /php-mongo-erp/public/login.php');
   exit;
 }
 
-$logId = trim($_GET['log_id'] ?? '');
+$logId = trim((string)($_GET['log_id'] ?? ''));
 if ($logId === '') {
   http_response_code(400);
-  echo "log_id required";
+  echo "log_id_required";
+  exit;
+}
+
+if (strlen($logId) !== 24 || !preg_match('/^[a-f0-9]{24}$/i', $logId)) {
+  http_response_code(400);
+  echo "log_id_invalid";
   exit;
 }
 
@@ -57,7 +68,10 @@ require_once __DIR__ . '/../app/views/layout/header.php';
 
           <div class="card mt-4">
             <div class="card-body">
-              <pre id="data" style="background:#0b1020;color:#eaeef7;padding:12px;border-radius:12px;overflow:auto;min-height:200px;">Yükleniyor…</pre>
+              <pre id="data" style="background:#0b1020;color:#eaeef7;padding:12px;border-radius:12px;overflow:auto;min-height:220px;">Yükleniyor…</pre>
+              <div class="text-muted mt-2" style="font-size:12px;">
+                Not: Bu ekran, API’den gelen log JSON’unu gösterir.
+              </div>
             </div>
           </div>
 
@@ -76,20 +90,14 @@ require_once __DIR__ . '/../app/views/layout/header.php';
 (function(){
   const pre = document.getElementById('data');
 
-  function esc(s){
-    return String(s ?? '').replace(/[&<>"']/g, (m)=>({
-      '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'
-    }[m]));
-  }
-
   fetch(<?php echo json_encode($apiUrl); ?>, { method:'GET', credentials:'same-origin' })
     .then(r => r.json())
     .then(d => {
-      if (!d.ok) throw new Error(d.error || 'api_error');
+      if (!d || !d.ok) throw new Error((d && (d.error_detail || d.error)) || 'api_error');
       pre.textContent = JSON.stringify(d.log || d, null, 2);
     })
     .catch(err => {
-      pre.textContent = 'Hata: ' + err.message;
+      pre.textContent = 'Hata: ' + (err && err.message ? err.message : 'unknown');
     });
 })();
 </script>

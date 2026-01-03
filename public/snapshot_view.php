@@ -5,8 +5,11 @@
  * - Snapshot JSON değil, HTML kart UI
  * - Prev / Next snapshot navigation
  * - Diff linki (prev varsa)
+ * - ✅ prev_snapshot_id: refs.prev_snapshot_id + prev_snapshot_id destek
+ * - ✅ snapshot_id ObjectId validate
+ * - ✅ Evraka Git (SORD01E ise edit.php)
  *
- * ✅ Theme Layout: header / left / header2 / footer
+ * Theme Layout: header / left / header2 / footer
  */
 
 require_once __DIR__ . '/../core/bootstrap.php';
@@ -24,14 +27,16 @@ if (!isset($_SESSION['context']) || !is_array($_SESSION['context'])) {
   exit;
 }
 
-try {
-  Context::bootFromSession();
-} catch (ContextException $e) {
+try { Context::bootFromSession(); }
+catch (ContextException $e) {
   header('Location: /php-mongo-erp/public/login.php');
   exit;
 }
 
 $ctx = Context::get();
+if (!is_array($ctx)) $ctx = [];
+
+date_default_timezone_set('Europe/Istanbul');
 
 function h($s): string { return htmlspecialchars((string)$s, ENT_QUOTES, 'UTF-8'); }
 
@@ -53,14 +58,54 @@ function fmt_tr_dt($iso): string {
   if (!$iso) return '-';
   $ts = strtotime((string)$iso);
   if ($ts === false) return (string)$iso;
-  date_default_timezone_set('Europe/Istanbul');
   return date('d.m.Y H:i:s', $ts);
 }
 
-$snapshotId = trim($_GET['snapshot_id'] ?? '');
+function try_oid(string $id): ?MongoDB\BSON\ObjectId {
+  if ($id === '' || strlen($id) !== 24) return null;
+  if (!preg_match('/^[a-f0-9]{24}$/i', $id)) return null;
+  try { return new MongoDB\BSON\ObjectId($id); }
+  catch (Throwable $e) { return null; }
+}
+
+function doc_url(array $t): ?string {
+  $module = strtolower((string)($t['module'] ?? ''));
+  $dt = strtoupper((string)($t['doc_type'] ?? ''));
+  $di = (string)($t['doc_id'] ?? '');
+
+  // SORD
+  if ($dt === 'SORD01E' && strlen($di) === 24) {
+    return '/php-mongo-erp/public/salesorder/edit.php?id=' . rawurlencode($di);
+  }
+  if ($module === 'salesorder' && $dt === 'SORD01E' && strlen($di) === 24) {
+    return '/php-mongo-erp/public/salesorder/edit.php?id=' . rawurlencode($di);
+  }
+
+  // Generic fallback -> timeline
+  if ($module !== '' && $dt !== '' && $di !== '') {
+    return '/php-mongo-erp/public/timeline.php?module=' . rawurlencode($module)
+         . '&doc_type=' . rawurlencode($dt)
+         . '&doc_id=' . rawurlencode($di);
+  }
+
+  return null;
+}
+
+function pretty_json($arr): string {
+  return json_encode($arr, JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES|JSON_PRETTY_PRINT);
+}
+
+$snapshotId = trim((string)($_GET['snapshot_id'] ?? ''));
 if ($snapshotId === '') {
   http_response_code(400);
   echo "snapshot_id_required";
+  exit;
+}
+
+$oid = try_oid($snapshotId);
+if (!$oid) {
+  http_response_code(400);
+  echo "snapshot_id_invalid";
   exit;
 }
 
@@ -70,10 +115,7 @@ ActionLogger::info('SNAPSHOT.VIEW', [
 ], $ctx);
 
 // --- load snapshot ---
-$snap = MongoManager::collection('SNAP01E')->findOne(
-  ['_id' => new MongoDB\BSON\ObjectId($snapshotId)]
-);
-
+$snap = MongoManager::collection('SNAP01E')->findOne(['_id' => $oid]);
 if (!$snap) {
   http_response_code(404);
   echo "snapshot_not_found";
@@ -84,16 +126,26 @@ $snap = bson_to_array($snap);
 
 $targetKey = (string)($snap['target_key'] ?? '');
 $ver = $snap['version'] ?? null;
-$prevId = $snap['prev_snapshot_id'] ?? null;
 
-// --- prev snapshot doc (if exists) ---
+// ✅ prev_snapshot_id (refs veya root)
+$prevId = '';
+if (!empty($snap['refs']) && is_array($snap['refs']) && !empty($snap['refs']['prev_snapshot_id'])) {
+  $prevId = (string)$snap['refs']['prev_snapshot_id'];
+} elseif (!empty($snap['prev_snapshot_id'])) {
+  $prevId = (string)$snap['prev_snapshot_id'];
+}
+
+// --- prev snapshot doc (optional) ---
 $prev = null;
 if ($prevId) {
-  try {
-    $prevDoc = MongoManager::collection('SNAP01E')->findOne(['_id' => new MongoDB\BSON\ObjectId((string)$prevId)]);
-    if ($prevDoc) $prev = bson_to_array($prevDoc);
-  } catch (Throwable $e) {
-    $prev = null;
+  $po = try_oid($prevId);
+  if ($po) {
+    try {
+      $prevDoc = MongoManager::collection('SNAP01E')->findOne(['_id' => $po]);
+      if ($prevDoc) $prev = bson_to_array($prevDoc);
+    } catch (Throwable $e) {
+      $prev = null;
+    }
   }
 }
 
@@ -110,10 +162,15 @@ if ($targetKey !== '' && $ver !== null && is_numeric($ver)) {
   );
   if ($nextDoc) $next = bson_to_array($nextDoc);
 }
-// 2) fallback by prev_snapshot_id
+
+// 2) fallback by prev_snapshot_id / refs.prev_snapshot_id
 if (!$next) {
+  $currId = (string)($snap['_id'] ?? $snapshotId);
   $nextDoc = MongoManager::collection('SNAP01E')->findOne(
-    ['prev_snapshot_id' => (string)($snap['_id'] ?? $snapshotId)],
+    ['$or' => [
+      ['prev_snapshot_id' => $currId],
+      ['refs.prev_snapshot_id' => $currId],
+    ]],
     ['sort' => ['version' => 1]]
   );
   if ($nextDoc) $next = bson_to_array($nextDoc);
@@ -134,14 +191,11 @@ $ctxSnap = (array)($snap['context'] ?? []);
 $createdTr = fmt_tr_dt($snap['created_at'] ?? '');
 $user = (string)($ctxSnap['username'] ?? '-');
 
-function pretty_json($arr): string {
-  return json_encode($arr, JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES|JSON_PRETTY_PRINT);
-}
-
 $data = $snap['data'] ?? [];
 $summary = $snap['summary'] ?? null;
 
-/** ✅ THEME HEAD */
+$docUrl = doc_url($target);
+
 require_once __DIR__ . '/../app/views/layout/header.php';
 ?>
 <body>
@@ -242,13 +296,19 @@ require_once __DIR__ . '/../app/views/layout/header.php';
                     <span class="sv-btn sv-btn-disabled">Diff</span>
                   <?php endif; ?>
 
+                  <?php if ($docUrl): ?>
+                    <a class="sv-btn" target="_blank" href="<?php echo h($docUrl); ?>">Evraka Git</a>
+                  <?php else: ?>
+                    <span class="sv-btn sv-btn-disabled">Evraka Git</span>
+                  <?php endif; ?>
+
                   <a class="sv-btn" href="<?php echo h($currJsonUrl); ?>" target="_blank">JSON</a>
                 </div>
               </div>
 
               <div class="sv-small">
                 target_key:<br>
-                <span class="sv-code"><?php echo h($targetKey); ?></span>
+                <span class="sv-code"><?php echo h($targetKey ?: '-'); ?></span>
               </div>
             </div>
 
@@ -261,13 +321,23 @@ require_once __DIR__ . '/../app/views/layout/header.php';
                     <div><b>doc_type</b>: <span class="sv-code"><?php echo h($target['doc_type'] ?? '-'); ?></span></div>
                     <div><b>doc_id</b>: <span class="sv-code"><?php echo h($target['doc_id'] ?? '-'); ?></span></div>
                     <div><b>doc_no</b>: <span class="sv-code"><?php echo h($target['doc_no'] ?? '-'); ?></span></div>
+                    <?php if (!empty($target['doc_title'])): ?>
+                      <div><b>doc_title</b>: <span class="sv-code"><?php echo h($target['doc_title']); ?></span></div>
+                    <?php endif; ?>
+                    <?php if (!empty($target['doc_status'])): ?>
+                      <div><b>doc_status</b>: <span class="sv-code"><?php echo h($target['doc_status']); ?></span></div>
+                    <?php endif; ?>
                   </div>
                 </div>
                 <div class="sv-box">
                   <div class="sv-kv">
+                    <div><b>snapshot_id</b>: <span class="sv-code"><?php echo h((string)($snap['_id'] ?? $snapshotId)); ?></span></div>
                     <div><b>hash</b>: <span class="sv-code"><?php echo h($snap['hash'] ?? '-'); ?></span></div>
                     <div><b>prev_hash</b>: <span class="sv-code"><?php echo h($snap['prev_hash'] ?? '-'); ?></span></div>
                     <div><b>prev_snapshot_id</b>: <span class="sv-code"><?php echo h($prevId ?: '-'); ?></span></div>
+                    <?php if (!empty($snap['refs']) && is_array($snap['refs']) && !empty($snap['refs']['log_id'])): ?>
+                      <div><b>log_id</b>: <span class="sv-code"><?php echo h($snap['refs']['log_id']); ?></span></div>
+                    <?php endif; ?>
                   </div>
                 </div>
               </div>

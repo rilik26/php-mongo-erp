@@ -3,7 +3,7 @@
  * public/api/lock_release.php (FINAL)
  * GET:
  *  ?module=...&doc_type=...&doc_id=...
- *  &force=1 (admin)
+ *  &force=1 (admin only)
  *
  * IMPORTANT:
  * - Always return JSON (even on warnings/fatal)
@@ -56,6 +56,9 @@ try {
     }
   } catch (Throwable $e) {}
 
+  $ctx = (class_exists('Context') ? (Context::get() ?? []) : []);
+  if (!is_array($ctx)) $ctx = [];
+
   $module  = trim((string)($_GET['module'] ?? ''));
   $docType = trim((string)($_GET['doc_type'] ?? ''));
   $docId   = trim((string)($_GET['doc_id'] ?? ''));
@@ -65,6 +68,17 @@ try {
   }
 
   $force = (($_GET['force'] ?? '') === '1');
+
+  if ($force) {
+    $role = (string)($ctx['role'] ?? '');
+    if ($role !== 'admin') {
+      j([
+        'ok' => false,
+        'error' => 'forbidden',
+        'error_detail' => 'force_release_requires_admin',
+      ], 403);
+    }
+  }
 
   $res = LockManager::release([
     'module' => $module,
