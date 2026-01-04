@@ -19,6 +19,11 @@ final class ErrorCatalog
             'SORD_NOT_FOUND'  => ['http'=>404, 'i18n'=>'sord.not_found', 'msg'=>'Sales order not found'],
             'SORD_SAVE_FAIL'  => ['http'=>500, 'i18n'=>'sord.save_failed', 'msg'=>'Sales order save failed'],
 
+            // stok
+            'STOK_VALIDATION' => ['http'=>422, 'i18n'=>'stok.validation_failed', 'msg'=>'Validation failed'],
+            'STOK_NOT_FOUND'  => ['http'=>404, 'i18n'=>'stok.not_found', 'msg'=>'Stock not found'],
+            'STOK_SAVE_FAIL'  => ['http'=>500, 'i18n'=>'stok.save_failed', 'msg'=>'Stock save failed'],
+
             // generic
             'FORBIDDEN'   => ['http'=>403, 'i18n'=>'common.forbidden', 'msg'=>'Forbidden'],
             'BAD_REQUEST' => ['http'=>400, 'i18n'=>'common.bad_request', 'msg'=>'Bad request'],

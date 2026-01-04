@@ -10,6 +10,8 @@
  * - ✅ FIX: prev_snapshot_id hem refs.prev_snapshot_id hem prev_snapshot_id
  * - ✅ FIX: snapshot_id ObjectId validate (400)
  * - ✅ FIX: prev snapshot yoksa güvenli mesaj
+ * - ✅ NEW: diff tablosunda *_at alanları TR tarih/saat gösterimi
+ * - ✅ FIX: snapshot payload alanı (payload/data uyumluluğu)
  *
  * Theme Layout: header / left / header2 / footer
  */
@@ -36,6 +38,8 @@ catch (ContextException $e) {
 }
 
 $ctx = Context::get();
+
+date_default_timezone_set('Europe/Istanbul');
 
 function esc($s): string { return htmlspecialchars((string)$s, ENT_QUOTES, 'UTF-8'); }
 
@@ -70,6 +74,33 @@ function fmt_tr($iso): string {
   }
 }
 
+function safe_json($v): string {
+  $j = json_encode($v, JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES);
+  if ($j === false) return '"<json_encode_failed>"';
+  return $j;
+}
+
+function pretty_diff_value(string $path, $val): string {
+  if ($val === null) return '';
+
+  if (is_bool($val) || is_int($val) || is_float($val)) {
+    return safe_json($val);
+  }
+  if (is_array($val)) {
+    return safe_json($val);
+  }
+
+  $s = (string)$val;
+
+  if (preg_match('/(^|\\.)[a-zA-Z0-9_]*_at$/', $path)) {
+    if (preg_match('/^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}/', $s)) {
+      return '"' . fmt_tr($s) . '"';
+    }
+  }
+
+  return safe_json($s);
+}
+
 function find_snapshot_by_id(string $id): ?array {
   $oid = try_oid($id);
   if (!$oid) return null;
@@ -92,10 +123,23 @@ function json_pretty($v): string {
   return json_encode($v, JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES|JSON_PRETTY_PRINT);
 }
 
-function safe_json($v): string {
-  $j = json_encode($v, JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES);
-  if ($j === false) return '"<json_encode_failed>"';
-  return $j;
+/**
+ * ✅ FIX: snapshot içindeki asıl veri alanını normalize et
+ * Yeni sistem: payload
+ * Eski sistem: data
+ */
+function snapshot_payload(array $snap): array {
+  if (isset($snap['payload'])) {
+    $p = $snap['payload'];
+    $p = is_array($p) ? $p : bson_to_array($p);
+    return is_array($p) ? $p : [];
+  }
+  if (isset($snap['data'])) {
+    $d = $snap['data'];
+    $d = is_array($d) ? $d : bson_to_array($d);
+    return is_array($d) ? $d : [];
+  }
+  return [];
 }
 
 /**
@@ -141,7 +185,6 @@ if ($snapshotId === '') {
   exit;
 }
 
-// ✅ FIX: snapshot_id ObjectId validate
 if (!try_oid($snapshotId)) {
   http_response_code(400);
   echo "snapshot_id_invalid";
@@ -160,7 +203,6 @@ if (!$snap) {
   exit;
 }
 
-// ✅ FIX: prev_snapshot_id nereden?
 $prevId = '';
 if (!empty($snap['refs']) && is_array($snap['refs']) && !empty($snap['refs']['prev_snapshot_id'])) {
   $prevId = (string)$snap['refs']['prev_snapshot_id'];
@@ -174,7 +216,6 @@ $ver = (int)($snap['version'] ?? 0);
 $prevByVer = ($targetKey && $ver > 1) ? find_snapshot_by_target_version($targetKey, $ver - 1) : null;
 $nextByVer = ($targetKey && $ver > 0) ? find_snapshot_by_target_version($targetKey, $ver + 1) : null;
 
-// prevSnap seçimi
 $prevSnap = null;
 if ($prevId) $prevSnap = find_snapshot_by_id($prevId);
 if (!$prevSnap && $prevByVer) {
@@ -182,12 +223,9 @@ if (!$prevSnap && $prevByVer) {
   if (!empty($prevByVer['_id'])) $prevId = (string)$prevByVer['_id'];
 }
 
-// prev yoksa: diff yok
-$oldData = $prevSnap['data'] ?? [];
-$newData = $snap['data'] ?? [];
-
-$oldData = is_array($oldData) ? $oldData : bson_to_array($oldData);
-$newData = is_array($newData) ? $newData : bson_to_array($newData);
+/** ✅ FIX: payload/data uyumlu diff */
+$oldData = $prevSnap ? snapshot_payload($prevSnap) : [];
+$newData = snapshot_payload($snap);
 
 $isLang = ($prevSnap && (isset($oldData['rows']) || isset($newData['rows'])));
 
@@ -206,7 +244,6 @@ if ($prevSnap) {
   }
 }
 
-/** THEME HEAD */
 require_once __DIR__ . '/../app/views/layout/header.php';
 ?>
 <body>
@@ -416,8 +453,8 @@ require_once __DIR__ . '/../app/views/layout/header.php';
                       <tr>
                         <td><span class="diff-code"><?php echo esc($it['path']); ?></span></td>
                         <td class="diff-small"><?php echo esc($it['type']); ?></td>
-                        <td class="diff-small"><?php echo esc(safe_json($it['from'])); ?></td>
-                        <td class="diff-small"><?php echo esc(safe_json($it['to'])); ?></td>
+                        <td class="diff-small"><?php echo esc(pretty_diff_value((string)$it['path'], $it['from'])); ?></td>
+                        <td class="diff-small"><?php echo esc(pretty_diff_value((string)$it['path'], $it['to'])); ?></td>
                       </tr>
                     <?php endforeach; ?>
                   </table>
@@ -429,12 +466,12 @@ require_once __DIR__ . '/../app/views/layout/header.php';
               <h5 style="margin:0 0 8px;">Detay JSON (opsiyonel)</h5>
 
               <details>
-                <summary class="diff-small">Prev Snapshot Data</summary>
+                <summary class="diff-small">Prev Snapshot Payload</summary>
                 <pre class="diff-pre diff-small"><?php echo esc(json_pretty($oldData)); ?></pre>
               </details>
 
               <details>
-                <summary class="diff-small">Current Snapshot Data</summary>
+                <summary class="diff-small">Current Snapshot Payload</summary>
                 <pre class="diff-pre diff-small"><?php echo esc(json_pretty($newData)); ?></pre>
               </details>
             </div>

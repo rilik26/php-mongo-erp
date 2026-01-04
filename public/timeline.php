@@ -1,13 +1,13 @@
 <?php
 /**
- * public/timeline.php (FINAL - EVENT01E)
+ * public/timeline.php (FINAL - GROUPED BY DOC)
  *
  * - Theme layout header/left/header2/footer
  * - Tenant scoped listing (CDEF + PERIOD)
  * - Filters + fulltext search (q)
  * - Cursor pagination (after)
  * - Target->doc URL resolver
- * - refs: log/snapshot/diff links (supports legacy prev_snapshot_id)
+ * - ✅ NEW: Group by target_key (same doc => single card)
  */
 
 require_once __DIR__ . '/../core/bootstrap.php';
@@ -64,6 +64,12 @@ function doc_url(array $t): ?string {
   if ($module === 'salesorder' && $dt === 'SORD01E' && $di !== '' && strlen($di) === 24) {
     return '/php-mongo-erp/public/salesorder/edit.php?id=' . rawurlencode($di);
   }
+
+  // ✅ stok edit resolver
+  if ($module === 'stok' && $dt === 'STOK01E' && $di !== '' && strlen($di) === 24) {
+    return '/php-mongo-erp/public/stok/edit.php?id=' . rawurlencode($di);
+  }
+
   if ($module === 'i18n' && $dt === 'LANG01T' && $di === 'DICT') {
     return '/php-mongo-erp/public/lang_admin.php';
   }
@@ -145,7 +151,6 @@ if ($q !== '') {
 }
 
 // Cursor pagination (after): created_at DESC, _id DESC
-// created_at < afterCreated OR (created_at == afterCreated AND _id < afterId)
 if ($afterIso !== '' && $afterId !== '') {
   try {
     $dt = new DateTime($afterIso);
@@ -166,29 +171,57 @@ if ($afterIso !== '' && $afterId !== '') {
   }
 }
 
+// Daha fazla event çekiyoruz, sonra dokümana göre gruplayıp kart sayısını limitliyoruz
+$rawLimit = $limit * 6;
+if ($rawLimit < 120) $rawLimit = 120;
+if ($rawLimit > 2000) $rawLimit = 2000;
+
 $cur = MongoManager::collection('EVENT01E')->find(
   $filter,
   [
     'sort'  => ['created_at' => -1, '_id' => -1],
-    'limit' => $limit + 1, // +1 for "hasNext"
+    'limit' => $rawLimit + 1,
   ]
 );
 
 $events = iterator_to_array($cur);
 $events = array_map('bson2arr', $events);
 
-$hasNext = false;
-if (count($events) > $limit) {
-  $hasNext = true;
-  $events = array_slice($events, 0, $limit);
+// ✅ NEW: group by target_key (fallback: module|type|id)
+$groups = []; // key => ['key'=>..., 'head'=>event, 'items'=>[...]]
+foreach ($events as $ev) {
+  $tkey = (string)($ev['target_key'] ?? '');
+  if ($tkey === '') {
+    $t = (array)($ev['target'] ?? []);
+    $tkey = strtolower((string)($t['module'] ?? '')) . '|' . strtoupper((string)($t['doc_type'] ?? '')) . '|' . (string)($t['doc_id'] ?? '');
+  }
+  if ($tkey === '||' || trim($tkey) === '') $tkey = (string)($ev['_id'] ?? '');
+
+  if (!isset($groups[$tkey])) {
+    $groups[$tkey] = [
+      'key' => $tkey,
+      'head' => $ev,   // en yeni event head
+      'items' => [],
+    ];
+  }
+  $groups[$tkey]['items'][] = $ev;
 }
 
-// next cursor based on last item in current page
+// kart limitine indir (head zaten en yeni olduğu için sıra bozulmasın)
+$groupList = array_values($groups);
+$hasNext = false;
+
+if (count($groupList) > $limit) {
+  $hasNext = true;
+  $groupList = array_slice($groupList, 0, $limit);
+}
+
+// next cursor: son kartın head event’i üzerinden
 $nextCursor = '';
-if (!empty($events)) {
-  $last = $events[count($events)-1];
-  $lastIso = (string)($last['created_at'] ?? '');
-  $lastId  = (string)($last['_id'] ?? '');
+if (!empty($groupList)) {
+  $lastHead = $groupList[count($groupList)-1]['head'];
+  $lastIso = (string)($lastHead['created_at'] ?? '');
+  $lastId  = (string)($lastHead['_id'] ?? '');
   if ($lastIso !== '' && $lastId !== '') {
     $nextCursor = base64_encode($lastIso . '|' . $lastId);
   }
@@ -229,18 +262,28 @@ require_once __DIR__ . '/../app/views/layout/header.php';
             @media (max-width:980px){ .tl-form{ grid-template-columns:1fr 1fr; } }
 
             .tl-in{ width:100%; height:42px; border:1px solid rgba(0,0,0,.12); border-radius:12px; padding:0 12px; }
-            .tl-btn{ height:42px; padding:0 14px; border-radius:12px; border:1px solid rgba(0,0,0,.12); background:#fff; text-decoration:none; display:inline-flex; align-items:center; justify-content:center; gap:8px; }
+            .tl-btn{ height:42px; padding:0 14px; border-radius:12px; border:1px solid rgba(0,0,0,.12); background:#fff; text-decoration:none; display:inline-flex; align-items:center; justify-content:center; gap:8px; color:#111; }
             .tl-btn-primary{ background:#1e88e5; border-color:#1e88e5; color:#fff; }
+            .tl-dim{ opacity:.45; pointer-events:none; }
 
             .tl-cards{ display:flex; flex-direction:column; gap:12px; margin-top:12px; }
             .tl-card{ background:#fff; border:1px solid rgba(0,0,0,.10); border-radius:16px; padding:14px; }
+
             .tl-row1{ display:flex; justify-content:space-between; flex-wrap:wrap; gap:10px; margin-bottom:8px; }
             .tl-code{ font-family: ui-monospace, Menlo, Monaco, Consolas, monospace; background:rgba(0,0,0,.05); padding:3px 8px; border-radius:999px; border:1px solid rgba(0,0,0,.10); font-size:12px; }
             .tl-meta{ color:rgba(0,0,0,.55); font-size:12px; display:flex; gap:10px; flex-wrap:wrap; align-items:center; }
+
             .tl-chips{ display:flex; gap:8px; flex-wrap:wrap; margin-top:8px; }
             .tl-chip{ background:rgba(0,0,0,.03); border:1px solid rgba(0,0,0,.10); padding:5px 10px; border-radius:999px; font-size:12px; }
+
             .tl-actions{ display:flex; gap:8px; flex-wrap:wrap; margin-top:10px; }
-            .tl-dim{ opacity:.45; pointer-events:none; }
+
+            /* ✅ NEW: action rows inside card */
+            .tl-lines{ margin-top:12px; border-top:1px dashed rgba(0,0,0,.12); padding-top:10px; display:flex; flex-direction:column; gap:8px; }
+            .tl-line{ display:flex; justify-content:space-between; gap:10px; flex-wrap:wrap; }
+            .tl-line-left{ display:flex; gap:8px; flex-wrap:wrap; align-items:center; }
+            .tl-pill{ font-size:12px; border:1px solid rgba(0,0,0,.12); background:rgba(0,0,0,.03); padding:3px 10px; border-radius:999px; }
+            .tl-time{ font-size:12px; color:rgba(0,0,0,.55); }
 
             .tl-pager{ display:flex; gap:10px; align-items:center; justify-content:flex-end; margin-top:14px; }
             .tl-badge{ font-size:12px; color:rgba(0,0,0,.55); }
@@ -259,8 +302,8 @@ require_once __DIR__ . '/../app/views/layout/header.php';
               <input class="tl-in" name="q"        value="<?php echo esc($q); ?>"         placeholder="Search (doc_no/title/user/event...)">
               <input class="tl-in" name="event"    value="<?php echo esc($eventCode); ?>" placeholder="event_code (örn: LOCK)">
               <input class="tl-in" name="user"     value="<?php echo esc($username); ?>"  placeholder="username (örn: admin)">
-              <input class="tl-in" name="module"   value="<?php echo esc($module); ?>"    placeholder="module (örn: salesorder)">
-              <input class="tl-in" name="doc_type" value="<?php echo esc($docType); ?>"   placeholder="doc_type (örn: SORD01E)">
+              <input class="tl-in" name="module"   value="<?php echo esc($module); ?>"    placeholder="module (örn: stok)">
+              <input class="tl-in" name="doc_type" value="<?php echo esc($docType); ?>"   placeholder="doc_type (örn: STOK01E)">
               <input class="tl-in" name="doc_id"   value="<?php echo esc($docId); ?>"     placeholder="doc_id (24 char)">
               <button class="tl-btn tl-btn-primary" type="submit">Getir</button>
               <a class="tl-btn" href="/php-mongo-erp/public/timeline.php">Sıfırla</a>
@@ -268,27 +311,17 @@ require_once __DIR__ . '/../app/views/layout/header.php';
             </form>
 
             <div class="tl-cards">
-              <?php if (empty($events)): ?>
+              <?php if (empty($groupList)): ?>
                 <div class="tl-card"><div class="tl-meta">Kayıt bulunamadı.</div></div>
               <?php endif; ?>
 
-              <?php foreach ($events as $ev):
-                $code = (string)($ev['event_code'] ?? '');
-                $tTr  = fmt_tr((string)($ev['created_at'] ?? ''));
-                $user = (string)($ev['context']['username'] ?? '');
+              <?php foreach ($groupList as $g):
+                $head = (array)$g['head'];
+                $items = (array)($g['items'] ?? []);
 
-                $target = (array)($ev['target'] ?? []);
-                $refs   = (array)($ev['refs'] ?? []);
-                $data   = (array)($ev['data'] ?? []);
+                $target = (array)($head['target'] ?? []);
+                $data   = (array)($head['data'] ?? []);
                 $sum    = is_array(($data['summary'] ?? null)) ? $data['summary'] : [];
-
-                // refs (support legacy fields too)
-                $logId  = $refs['log_id'] ?? ($ev['log_id'] ?? null);
-                $snapId = $refs['snapshot_id'] ?? ($ev['snapshot_id'] ?? null);
-
-                $prevId = '';
-                if (!empty($refs['prev_snapshot_id'])) $prevId = (string)$refs['prev_snapshot_id'];
-                elseif (!empty($ev['prev_snapshot_id'])) $prevId = (string)$ev['prev_snapshot_id'];
 
                 $tMod = (string)($target['module'] ?? '-');
                 $tDt  = (string)($target['doc_type'] ?? '-');
@@ -300,20 +333,37 @@ require_once __DIR__ . '/../app/views/layout/header.php';
                 if ($docStatus === '') $docStatus = (string)($target['status'] ?? '');
 
                 $docUrl = doc_url($target);
+
+                // head refs
+                $refs = (array)($head['refs'] ?? []);
+                $logId  = $refs['log_id'] ?? ($head['log_id'] ?? null);
+                $snapId = $refs['snapshot_id'] ?? ($head['snapshot_id'] ?? null);
+                $prevId = '';
+                if (!empty($refs['prev_snapshot_id'])) $prevId = (string)$refs['prev_snapshot_id'];
+                elseif (!empty($head['prev_snapshot_id'])) $prevId = (string)$head['prev_snapshot_id'];
+
+                // kart title
+                $cardTitle = (string)($sum['title'] ?? '');
+                if ($cardTitle === '') {
+                  if ($title !== '') $cardTitle = $title;
+                  elseif ($docNo !== '') $cardTitle = $docNo;
+                  else $cardTitle = strtoupper($tMod) . ' ' . $tDt;
+                }
+
+                // kart subtitle / meta
+                $headTime = fmt_tr((string)($head['created_at'] ?? ''));
+                $headUser = (string)($head['context']['username'] ?? '');
               ?>
               <div class="tl-card">
                 <div class="tl-row1">
                   <div>
                     <div style="font-weight:800;">
-                      <?php echo esc($sum['title'] ?? ($code ?: 'EVENT')); ?>
-                      <?php if ($code !== ''): ?>
-                        <span class="tl-code"><?php echo esc($code); ?></span>
-                      <?php endif; ?>
+                      <?php echo esc($cardTitle); ?>
                     </div>
                     <div class="tl-meta">
-                      <?php echo esc($tTr); ?> — <b><?php echo esc($user ?: '-'); ?></b>
-                      <?php if (!empty($sum['subtitle'])): ?>
-                        — <?php echo esc((string)$sum['subtitle']); ?>
+                      Son işlem: <?php echo esc($headTime); ?> — <b><?php echo esc($headUser ?: '-'); ?></b>
+                      <?php if ($docStatus !== ''): ?>
+                        — durum: <b><?php echo esc($docStatus); ?></b>
                       <?php endif; ?>
                     </div>
                   </div>
@@ -325,8 +375,6 @@ require_once __DIR__ . '/../app/views/layout/header.php';
                   <span class="tl-chip">doc_id: <b><?php echo esc($tDi); ?></b></span>
                   <?php if ($docNo !== ''): ?><span class="tl-chip">doc_no: <b><?php echo esc($docNo); ?></b></span><?php endif; ?>
                   <?php if ($title !== ''): ?><span class="tl-chip">title: <b><?php echo esc($title); ?></b></span><?php endif; ?>
-                  <?php if ($docStatus !== ''): ?><span class="tl-chip">doc_status: <b><?php echo esc($docStatus); ?></b></span><?php endif; ?>
-                  <?php if (!empty($sum['version'])): ?><span class="tl-chip">version: <b><?php echo esc($sum['version']); ?></b></span><?php endif; ?>
                 </div>
 
                 <div class="tl-actions">
@@ -354,12 +402,62 @@ require_once __DIR__ . '/../app/views/layout/header.php';
                     <span class="tl-btn tl-dim">DIFF</span>
                   <?php endif; ?>
                 </div>
+
+                <!-- ✅ NEW: aynı evrak altındaki tüm eventleri tek kart içinde göster -->
+                <div class="tl-lines">
+                  <?php
+                    $maxLines = 12;
+                    $i = 0;
+                    foreach ($items as $ev):
+                      if ($i >= $maxLines) break;
+                      $i++;
+
+                      $code = (string)($ev['event_code'] ?? 'EVENT');
+                      $tTr  = fmt_tr((string)($ev['created_at'] ?? ''));
+                      $usr  = (string)($ev['context']['username'] ?? '');
+
+                      $d = (array)($ev['data'] ?? []);
+                      $s = is_array(($d['summary'] ?? null)) ? $d['summary'] : [];
+                      $lineTitle = (string)($s['title'] ?? '');
+                      if ($lineTitle === '') $lineTitle = $code;
+                      $lineSub = (string)($s['subtitle'] ?? '');
+
+                      $r = (array)($ev['refs'] ?? []);
+                      $lineSnap = $r['snapshot_id'] ?? ($ev['snapshot_id'] ?? null);
+                      $linePrev = $r['prev_snapshot_id'] ?? ($ev['prev_snapshot_id'] ?? null);
+                      $lineLog  = $r['log_id'] ?? ($ev['log_id'] ?? null);
+
+                      $mini = [];
+                      if ($lineLog)  $mini[] = '<a class="tl-btn" style="height:32px;padding:0 10px;border-radius:10px;" target="_blank" href="/php-mongo-erp/public/log_view.php?log_id=' . urlencode((string)$lineLog) . '">LOG</a>';
+                      if ($lineSnap) $mini[] = '<a class="tl-btn" style="height:32px;padding:0 10px;border-radius:10px;" target="_blank" href="/php-mongo-erp/public/snapshot_view.php?snapshot_id=' . urlencode((string)$lineSnap) . '">SNAP</a>';
+                      if ($lineSnap && $linePrev) $mini[] = '<a class="tl-btn" style="height:32px;padding:0 10px;border-radius:10px;" target="_blank" href="/php-mongo-erp/public/snapshot_diff_view.php?snapshot_id=' . urlencode((string)$lineSnap) . '">DIFF</a>';
+                  ?>
+                    <div class="tl-line">
+                      <div class="tl-line-left">
+                        <span class="tl-pill"><?php echo esc($code); ?></span>
+                        <span class="tl-time"><?php echo esc($tTr); ?></span>
+                        <span class="tl-time">— <?php echo esc($usr ?: '-'); ?></span>
+                        <?php if ($lineSub !== ''): ?>
+                          <span class="tl-time">— <?php echo esc($lineSub); ?></span>
+                        <?php endif; ?>
+                      </div>
+                      <div style="display:flex;gap:8px;flex-wrap:wrap;">
+                        <?php echo implode('', $mini); ?>
+                      </div>
+                    </div>
+                  <?php endforeach; ?>
+
+                  <?php if (count($items) > $maxLines): ?>
+                    <div class="tl-time">+ <?php echo (int)(count($items) - $maxLines); ?> daha fazla event (filtre ile daraltabilirsin)</div>
+                  <?php endif; ?>
+                </div>
+
               </div>
               <?php endforeach; ?>
             </div>
 
             <div class="tl-pager">
-              <span class="tl-badge">limit: <b><?php echo (int)$limit; ?></b> — sonuç: <b><?php echo (int)count($events); ?></b></span>
+              <span class="tl-badge">limit: <b><?php echo (int)$limit; ?></b> — kart: <b><?php echo (int)count($groupList); ?></b></span>
               <?php if ($hasNext && $nextCursor !== ''): ?>
                 <a class="tl-btn tl-btn-primary" href="/php-mongo-erp/public/timeline.php?<?php echo esc(build_qs(['after' => $nextCursor])); ?>">Daha Fazla →</a>
               <?php else: ?>

@@ -172,6 +172,11 @@
                   </a>
                 </li>
                 <li class="menu-item">
+                  <a href="<?php echo $ASSET_BASE; ?>/stok/index.php" class="menu-link">
+                    <div >Stok Kartları</div>
+                  </a>
+                </li>
+                <li class="menu-item">
                   <a href="layouts-content-navbar.html" class="menu-link">
                     <div data-i18n="Content navbar">Content navbar</div>
                   </a>

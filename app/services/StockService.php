@@ -1,13 +1,22 @@
 <?php
-require_once __DIR__ . '/../action/ActionLogger.php';
+/**
+ * app/services/StockService.php
+ *
+ * Legacy StockDocument bağımlılığı vardı. STOK01Repository ile uyumlu hale getirildi.
+ */
+
+require_once __DIR__ . '/../modules/stok/STOK01Repository.php';
+
 class StockService
 {
-    public static function create(array $data): void
+    /**
+     * Context'e göre stok kartı create/update.
+     *
+     * @return array STOK01Repository::save dönüşü
+     */
+    public static function save(array $fields, array $ctx, ?string $id = null): array
     {
         PermissionChecker::check('STOK01E', 'create');
-
-        $stok = new StockDocument($data);
-        $stok->save();
-
+        return STOK01Repository::save($fields, $ctx, $id);
     }
 }

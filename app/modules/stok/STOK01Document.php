@@ -9,7 +9,7 @@
  * - collectionCode() döndürmek
  */
 
-require_once __DIR__ . '/../../core/base/BaseDocument.php';
+require_once __DIR__ . '/../../../core/base/BaseDocument.php';
 
 final class STOK01Document extends BaseDocument
 {
