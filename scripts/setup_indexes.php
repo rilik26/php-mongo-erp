@@ -1,42 +1,39 @@
 <?php
 /**
- * scripts/setup_indexes.php
- * STOK01E için MongoDB index kurulum scripti
+ * scripts/setup_indexes.php (FINAL)
  *
- * Not: MongoManager'a bağımlı DEĞİL. Direkt MongoDB\Client kullanır.
+ * - index name conflict safe
  */
 
-require_once __DIR__ . '/../vendor/autoload.php';
+require_once __DIR__ . '/../core/bootstrap.php';
 
-use MongoDB\Client;
+function ensureIndex($colName, $keys, $options = [])
+{
+  $col = MongoManager::collection($colName);
 
-$config = require __DIR__ . '/../config/database/mongo.php';
+  $exists = false;
+  foreach ($col->listIndexes() as $idx) {
+    $k = $idx->getKey();
+    if ($k == $keys) { $exists = true; break; }
+  }
 
-$uri = $config['uri'] ?? null;
-$dbName = $config['database'] ?? null;
+  if ($exists) return;
 
-if (!$uri || !$dbName) {
-  die("Mongo config missing (uri/database)\n");
+  $col->createIndex($keys, $options);
 }
 
-$client = new Client($uri);
-$db = $client->selectDatabase($dbName);
+try {
+  // STOK uniq: tenant + code
+  ensureIndex('STOK01E', ['CDEF01_id'=>1,'PERIOD01T_id'=>1,'code'=>1], ['unique'=>true, 'name'=>'uniq_stok_code_per_tenant']);
 
+  // SNAP01E target_key + version
+  ensureIndex('SNAP01E', ['target_key'=>1,'version'=>1], ['unique'=>true, 'name'=>'uniq_snap_target_version']);
 
-// --- STOK01E indexes (FINAL - code unique) ---
-$stok = $db->selectCollection('STOK01E');
+  // EVENT01E search speed
+  ensureIndex('EVENT01E', ['created_at'=>-1], ['name'=>'idx_event_created_at']);
+  ensureIndex('EVENT01E', ['target_key'=>1,'created_at'=>-1], ['name'=>'idx_event_target_created']);
 
-// eski uniq index adı varsa (stok_kodu üstünden), güvenli şekilde sil
-try { $stok->dropIndex('uniq_stok_kodu_per_tenant'); } catch (Throwable $e) {}
-
-// yeni unique: {CDEF01_id, PERIOD01T_id, code}
-$stok->createIndex(
-  ['CDEF01_id' => 1, 'PERIOD01T_id' => 1, 'code' => 1],
-  ['name' => 'uniq_stok_code_per_tenant', 'unique' => true]
-);
-
-// listeleme hızlansın
-$stok->createIndex(
-  ['CDEF01_id' => 1, 'PERIOD01T_id' => 1, 'updated_at' => -1],
-  ['name' => 'idx_stok_tenant_updated']
-);
+  echo "INDEXES OK";
+} catch (Throwable $e) {
+  echo "ERROR: " . $e->getMessage();
+}

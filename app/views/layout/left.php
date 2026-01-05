@@ -177,8 +177,8 @@
                   </a>
                 </li>
                 <li class="menu-item">
-                  <a href="layouts-content-navbar.html" class="menu-link">
-                    <div data-i18n="Content navbar">Content navbar</div>
+                  <a class="menu-link" href="/php-mongo-erp/public/gdef/index.php">
+                    <div>Grup Tanımları (GDEF)</div>
                   </a>
                 </li>
                 <li class="menu-item">

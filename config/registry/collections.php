@@ -44,6 +44,12 @@ return [
     'TIMELINE01T',
     'SEQ01T',
     'SNAPSHOT01T',
+
+
+    // Grup tanımları (GLOBAL)
+    'GDEF01E',
+    'GDEF01T',
+
     
 
 ];

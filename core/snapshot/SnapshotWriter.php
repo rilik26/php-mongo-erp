@@ -1,15 +1,16 @@
 <?php
 /**
- * core/snapshot/SnapshotWriter.php
+ * core/snapshot/SnapshotWriter.php (FINAL)
  *
  * SNAPSHOT STANDARD (V1)
  * - SNAP01E: evrakın tam hali (versioned)
  * - SNAPSEQ01E: atomic version counter
  * - hash chain: prev_hash + data => sha256
  *
- * ÖNEMLİ:
- * - Üst seviye module/doc_type/doc_id alanları eklendi (index + query kolaylığı)
- * - prev_snapshot_id alana yazılır
+ * ✅ FIX (period):
+ * - Context bazen period_id değil PERIOD01T_id taşıyor.
+ * - period_id = (period_id ?? PERIOD01T_id ?? period)
+ * - Böylece target_key ve timeline filtreleri tutarlı olur.
  */
 
 use MongoDB\BSON\UTCDateTime;
@@ -55,7 +56,7 @@ final class SnapshotWriter
             'target_key' => $targetKey,
             'target'     => $target,
 
-            // ✅ flat alanlar (index uyumu + hızlı filtre)
+            // flat alanlar (index uyumu + hızlı filtre)
             'module'     => $target['module'] ?? null,
             'doc_type'   => $target['doc_type'] ?? null,
             'doc_id'     => $target['doc_id'] ?? null,
@@ -125,11 +126,7 @@ final class SnapshotWriter
         $ctx = [];
 
         if (class_exists('Context')) {
-            try {
-                $ctx = Context::get();
-            } catch (Throwable $e) {
-                $ctx = [];
-            }
+            try { $ctx = Context::get(); } catch (Throwable $e) { $ctx = []; }
         }
 
         if (empty($ctx) && isset($_SESSION['context']) && is_array($_SESSION['context'])) {
@@ -141,14 +138,20 @@ final class SnapshotWriter
 
     private static function normalizeContext(array $ctx): array
     {
+        // ✅ period fallback: period_id yoksa PERIOD01T_id kullan
+        $period = $ctx['period_id'] ?? ($ctx['PERIOD01T_id'] ?? ($ctx['period'] ?? null));
+
         return [
-            'UDEF01_id'   => $ctx['UDEF01_id'] ?? null,
-            'username'    => $ctx['username'] ?? null,
-            'CDEF01_id'   => $ctx['CDEF01_id'] ?? null,
-            'period_id'   => $ctx['period_id'] ?? null,
-            'facility_id' => $ctx['facility_id'] ?? null,
-            'role'        => $ctx['role'] ?? null,
-            'session_id'  => $ctx['session_id'] ?? session_id(),
+            'UDEF01_id'    => $ctx['UDEF01_id'] ?? null,
+            'username'     => $ctx['username'] ?? null,
+            'CDEF01_id'    => $ctx['CDEF01_id'] ?? null,
+
+            'PERIOD01T_id' => $ctx['PERIOD01T_id'] ?? ($ctx['period_id'] ?? null),
+            'period_id'    => $period,
+
+            'facility_id'  => $ctx['facility_id'] ?? null,
+            'role'         => $ctx['role'] ?? null,
+            'session_id'   => $ctx['session_id'] ?? session_id(),
         ];
     }
 

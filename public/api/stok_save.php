@@ -1,11 +1,6 @@
 <?php
 /**
  * public/api/stok_save.php (FINAL)
- *
- * - Context zorunlu
- * - Validation (kod zorunlu)
- * - Repository save
- * - ActionLogger + EventWriter + SnapshotWriter + Webhook
  */
 
 require_once __DIR__ . '/../../core/bootstrap.php';
@@ -17,172 +12,132 @@ require_once __DIR__ . '/../../core/error/api_response.php';
 require_once __DIR__ . '/../../core/action/ActionLogger.php';
 require_once __DIR__ . '/../../core/event/EventWriter.php';
 require_once __DIR__ . '/../../core/snapshot/SnapshotWriter.php';
-require_once __DIR__ . '/../../core/webhook/WebhookService.php';
 
+require_once __DIR__ . '/../../app/modules/gdef/GDEF01TRepository.php';
 require_once __DIR__ . '/../../app/modules/stok/STOK01Repository.php';
 
 SessionManager::start();
 
 try { Context::bootFromSession(); }
-catch (Throwable $e) {
-    api_err('AUTH_REQUIRED', ['msg' => 'login_required']);
-}
+catch (ContextException $e) { api_err('AUTH_FAILED'); }
 
 $ctx = Context::get();
 
+if ($_SERVER['REQUEST_METHOD'] !== 'POST') api_err('BAD_REQUEST', ['detail' => 'POST required']);
+
+$raw = file_get_contents('php://input');
+$data = json_decode($raw, true);
+if (!is_array($data)) api_err('BAD_REQUEST', ['detail' => 'invalid_json']);
+
+$id = trim((string)($data['STOK01_id'] ?? $data['_id'] ?? $data['id'] ?? ''));
+if ($id !== '' && strlen($id) !== 24) api_err('BAD_REQUEST', ['detail' => 'invalid_id']);
+
 try {
-    $raw = file_get_contents('php://input');
-    $data = json_decode($raw, true);
-    if (!is_array($data)) $data = [];
+  $code = trim((string)($data['code'] ?? ''));
+  if ($code === '') api_err('STOK_VALIDATION', ['fields' => ['code'], 'detail' => 'code_required']);
 
-    $id = trim((string)($data['id'] ?? ''));
+  $unitCode = trim((string)($data['GDEF01_unit_code'] ?? ''));
+  if ($unitCode === '') api_err('STOK_VALIDATION', ['fields' => ['GDEF01_unit_code'], 'detail' => 'unit_required']);
 
-    // geriye uyum: eski key geldiyse yeniye map’le
-    if (!isset($data['kod']) && isset($data['stok_kodu'])) $data['kod'] = $data['stok_kodu'];
-    if (!isset($data['name']) && isset($data['stok_adi'])) $data['name'] = $data['stok_adi'];
-    if (!isset($data['unit']) && isset($data['birim'])) $data['unit'] = $data['birim'];
+  // global unit doğrulama
+  $unitRow = GDEF01TRepository::findItem('unit', $unitCode);
+  if (!$unitRow || empty($unitRow['is_active'])) {
+    api_err('STOK_VALIDATION', ['fields' => ['GDEF01_unit_code'], 'detail' => 'unit_invalid']);
+  }
 
-    $kod = trim((string)($data['kod'] ?? ''));
-    if ($kod === '') api_err('STOK_VALIDATION', ['fields' => ['kod'], 'detail' => 'kod_required']);
+  // unit text'i dokümana yaz (code - name)
+  $unitText = trim((string)($unitRow['name'] ?? ''));
+  $data['unit'] = ($unitText !== '') ? ($unitCode . ' - ' . $unitText) : $unitCode;
 
-    // aktif/pasif
-    if (array_key_exists('is_active', $data)) {
-        $data['is_active'] = (bool)$data['is_active'];
-    }
+  if (array_key_exists('is_active', $data)) $data['is_active'] = (bool)$data['is_active'];
 
-    $stat = STOK01Repository::save($data, $ctx, ($id !== '' ? $id : null));
+  $stat = STOK01Repository::save($data, $ctx, ($id !== '' ? $id : null));
 
-    // LOG
-    $logId = ActionLogger::success('STOK.SAVE', [
-        'source'   => 'public/api/stok_save.php',
-        'kod'      => $stat['kod'] ?? null,
-        'STOK01_id'=> $stat['STOK01_id'] ?? null,
-        'is_active'=> $stat['is_active'] ?? null,
-        'version'  => $stat['version'] ?? null,
-    ], $ctx);
+  $logId = ActionLogger::success('STOK.SAVE', [
+    'source' => 'public/api/stok_save.php',
+    'STOK01_id' => $stat['STOK01_id'] ?? null,
+    'code' => $stat['code'] ?? null,
+    'is_active' => $stat['is_active'] ?? null,
+    'version' => $stat['version'] ?? null,
+  ], $ctx);
 
-    // EVENT (SAVE)
-    EventWriter::emit(
-        'STOK.SAVE',
-        [
-            'source' => 'public/api/stok_save.php',
-            'summary' => [
-                'kod'       => $stat['kod'] ?? null,
-                'name'      => $stat['name'] ?? null,
-                'is_active' => $stat['is_active'] ?? null,
-                'version'   => $stat['version'] ?? null,
-            ],
-        ],
-        [
-            'module'    => 'stok',
-            'doc_type'  => 'STOK01E',
-            'doc_id'    => $stat['STOK01_id'] ?? null,
-            'doc_no'    => $stat['kod'] ?? null,
-            'doc_title' => $stat['name'] ?? 'Stock',
-            'status'    => ($stat['is_active'] ?? true) ? 'ACTIVE' : 'PASSIVE',
-        ],
-        $ctx,
-        ['log_id' => $logId]
-    );
+  $dump = STOK01Repository::dumpFull((string)$stat['STOK01_id']);
 
-    // SNAPSHOT
-    $dump = STOK01Repository::dumpFull((string)$stat['STOK01_id']);
-    $snap = SnapshotWriter::capture(
-        [
-            'module'    => 'stok',
-            'doc_type'  => 'STOK01E',
-            'doc_id'    => $stat['STOK01_id'],
-            'doc_no'    => $stat['kod'],
-            'doc_title' => $stat['name'] ?? 'Stock',
-            'status'    => ($stat['is_active'] ?? true) ? 'ACTIVE' : 'PASSIVE',
-        ],
-        $dump,
-        [
-            'reason' => 'save',
-            'changed_fields' => array_keys($data),
-            'version' => $stat['version'] ?? null,
-        ]
-    );
+  $snap = SnapshotWriter::capture(
+    [
+      'module' => 'stok',
+      'doc_type' => 'STOK01E',
+      'doc_id' => $stat['STOK01_id'],
+      'doc_no' => $stat['code'] ?? null,
+      'doc_title' => $stat['name'] ?? null,
+      'doc_status' => ($stat['is_active'] ?? true) ? 'ACTIVE' : 'PASSIVE',
+    ],
+    $dump,
+    [
+      'reason' => 'save',
+      'version' => $stat['version'] ?? null,
+    ],
+    $ctx
+  );
 
-    EventWriter::emit(
-        'STOK.SNAPSHOT',
-        [
-            'source' => 'public/api/stok_save.php',
-            'summary' => [
-                'snapshot_id' => $snap['snapshot_id'] ?? null,
-            ],
-        ],
-        [
-            'module'    => 'stok',
-            'doc_type'  => 'STOK01E',
-            'doc_id'    => $stat['STOK01_id'],
-            'doc_no'    => $stat['kod'],
-            'doc_title' => $stat['name'] ?? 'Stock',
-            'status'    => ($stat['is_active'] ?? true) ? 'ACTIVE' : 'PASSIVE',
-        ],
-        $ctx,
-        [
-            'log_id' => $logId,
-            'snapshot_id' => $snap['snapshot_id'] ?? null,
-            'prev_snapshot_id' => $snap['prev_snapshot_id'] ?? null,
-        ]
-    );
+  EventWriter::emit(
+    'STOK.SAVE',
+    [
+      'source' => 'public/api/stok_save.php',
+      'summary' => [
+        'doc_no' => $stat['code'] ?? null,
+        'title' => $stat['name'] ?? null,
+        'status' => ($stat['is_active'] ?? true) ? 'ACTIVE' : 'PASSIVE',
+        'version' => $stat['version'] ?? null,
+      ],
+    ],
+    [
+      'module' => 'stok',
+      'doc_type' => 'STOK01E',
+      'doc_id' => $stat['STOK01_id'] ?? null,
+      'doc_no' => $stat['code'] ?? null,
+      'doc_title' => $stat['name'] ?? null,
+      'status' => ($stat['is_active'] ?? true) ? 'ACTIVE' : 'PASSIVE',
+    ],
+    $ctx,
+    [
+      'log_id' => $logId,
+      'snapshot_id' => $snap['snapshot_id'] ?? null,
+      'prev_snapshot_id' => $snap['prev_snapshot_id'] ?? null,
+    ]
+  );
 
-    // WEBHOOK
-    WebhookService::dispatch('STOK.SAVE', [
-        'STOK01_id' => $stat['STOK01_id'],
-        'kod'       => $stat['kod'],
-        'name'      => $stat['name'] ?? null,
-        'name2'     => $stat['name2'] ?? null,
-        'unit'      => $stat['unit'] ?? null,
-        'is_active' => $stat['is_active'] ?? null,
-        'version'   => $stat['version'] ?? null,
-    ], $ctx);
-
-    WebhookService::dispatch('STOK.SNAPSHOT', [
-        'STOK01_id' => $stat['STOK01_id'],
-        'kod'       => $stat['kod'],
-        'snapshot_id'      => $snap['snapshot_id'] ?? null,
-        'prev_snapshot_id' => $snap['prev_snapshot_id'] ?? null,
-    ], $ctx);
-
-    api_ok([
-        'STOK01_id' => $stat['STOK01_id'],
-        'kod'       => $stat['kod'],
-        'name'      => $stat['name'] ?? null,
-        'name2'     => $stat['name2'] ?? null,
-        'unit'      => $stat['unit'] ?? null,
-        'is_active' => $stat['is_active'] ?? null,
-        'version'   => $stat['version'] ?? null,
-        'msg'       => 'saved',
-    ]);
+  api_ok([
+    'stok_id' => $stat['STOK01_id'],
+    'code' => $stat['code'],
+    'snapshot_id' => $snap['snapshot_id'] ?? null,
+  ]);
 
 } catch (InvalidArgumentException $e) {
-    // kod_not_unique vs kod_required
-    $detail = $e->getMessage();
+  $msg = $e->getMessage();
 
-    if ($detail === 'kod_not_unique') {
-        api_err('STOK_VALIDATION', [
-            'fields' => ['kod'],
-            'detail' => 'kod_not_unique'
-        ]);
-    }
-
-    if ($detail === 'kod_required') {
-        api_err('STOK_VALIDATION', [
-            'fields' => ['kod'],
-            'detail' => 'kod_required'
-        ]);
-    }
-
+  // ✅ kullanıcıya okunur hata
+  if ($msg === 'code_not_unique') {
     api_err('STOK_VALIDATION', [
-        'detail' => $detail,
-        'msg' => 'validation_error'
+      'fields' => ['code'],
+      'detail' => 'code_not_unique',
+      'msg' => 'Bu stok kodu zaten var. Kaydedilmedi.',
     ]);
+  }
+
+  api_err('STOK_VALIDATION', [
+    'detail' => $msg,
+    'msg' => 'Eksik/Geçersiz bilgi. Kaydedilmedi.',
+  ]);
 
 } catch (Throwable $e) {
-    api_err('STOK_SAVE_FAILED', [
-        'msg' => 'save_failed',
-        'detail' => $e->getMessage()
-    ]);
+  ActionLogger::fail('STOK.SAVE.FAIL', [
+    'source' => 'public/api/stok_save.php',
+    'error' => $e->getMessage(),
+  ], $ctx);
+
+  api_err('STOK_SAVE_FAIL', [
+    'detail' => 'server_error',
+    'msg' => 'Kaydetme sırasında hata oluştu. Kaydedilmedi.',
+  ]);
 }

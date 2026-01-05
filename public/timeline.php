@@ -7,7 +7,9 @@
  * - Filters + fulltext search (q)
  * - Cursor pagination (after)
  * - Target->doc URL resolver
- * - ✅ NEW: Group by target_key (same doc => single card)
+ * - ✅ Group by target_key (same doc => single card)
+ * - ✅ FIX: Groups sorted by head.created_at DESC
+ * - ✅ FIX: Card refs (LOG/SNAP/DIFF) taken from newest item that has refs
  */
 
 require_once __DIR__ . '/../core/bootstrap.php';
@@ -65,7 +67,9 @@ function doc_url(array $t): ?string {
     return '/php-mongo-erp/public/salesorder/edit.php?id=' . rawurlencode($di);
   }
 
-  // ✅ stok edit resolver
+  if ($dt === 'STOK01E' && $di !== '' && strlen($di) === 24) {
+    return '/php-mongo-erp/public/stok/edit.php?id=' . rawurlencode($di);
+  }
   if ($module === 'stok' && $dt === 'STOK01E' && $di !== '' && strlen($di) === 24) {
     return '/php-mongo-erp/public/stok/edit.php?id=' . rawurlencode($di);
   }
@@ -80,6 +84,34 @@ function doc_url(array $t): ?string {
     return '/php-mongo-erp/public/timeline.php?module=' . rawurlencode($module) . '&doc_type=' . rawurlencode($dt) . '&doc_id=' . rawurlencode($di);
   }
   return null;
+}
+
+/**
+ * ✅ Kart üst refs seçimi:
+ * items içinde en yeni event’ten (refs/log/snap) olanı al.
+ */
+function pick_best_refs(array $items): array {
+  $best = [
+    'log_id' => null,
+    'snapshot_id' => null,
+    'prev_snapshot_id' => null,
+  ];
+
+  foreach ($items as $ev) {
+    $refs = (array)($ev['refs'] ?? []);
+    $log  = $refs['log_id'] ?? ($ev['log_id'] ?? null);
+    $snap = $refs['snapshot_id'] ?? ($ev['snapshot_id'] ?? null);
+    $prev = $refs['prev_snapshot_id'] ?? ($ev['prev_snapshot_id'] ?? null);
+
+    // en yeni event'ler zaten başta geliyor, ilk dolu gördüğünü al
+    if ($best['log_id'] === null && $log)  $best['log_id'] = $log;
+    if ($best['snapshot_id'] === null && $snap) $best['snapshot_id'] = $snap;
+    if ($best['prev_snapshot_id'] === null && $prev) $best['prev_snapshot_id'] = $prev;
+
+    if ($best['log_id'] && $best['snapshot_id']) break;
+  }
+
+  return $best;
 }
 
 // ---- Filters ----
@@ -171,7 +203,7 @@ if ($afterIso !== '' && $afterId !== '') {
   }
 }
 
-// Daha fazla event çekiyoruz, sonra dokümana göre gruplayıp kart sayısını limitliyoruz
+// fetch more events then group
 $rawLimit = $limit * 6;
 if ($rawLimit < 120) $rawLimit = 120;
 if ($rawLimit > 2000) $rawLimit = 2000;
@@ -187,8 +219,8 @@ $cur = MongoManager::collection('EVENT01E')->find(
 $events = iterator_to_array($cur);
 $events = array_map('bson2arr', $events);
 
-// ✅ NEW: group by target_key (fallback: module|type|id)
-$groups = []; // key => ['key'=>..., 'head'=>event, 'items'=>[...]]
+// group by target_key
+$groups = [];
 foreach ($events as $ev) {
   $tkey = (string)($ev['target_key'] ?? '');
   if ($tkey === '') {
@@ -200,23 +232,33 @@ foreach ($events as $ev) {
   if (!isset($groups[$tkey])) {
     $groups[$tkey] = [
       'key' => $tkey,
-      'head' => $ev,   // en yeni event head
+      'head' => $ev,
       'items' => [],
     ];
   }
   $groups[$tkey]['items'][] = $ev;
 }
 
-// kart limitine indir (head zaten en yeni olduğu için sıra bozulmasın)
 $groupList = array_values($groups);
-$hasNext = false;
 
+/**
+ * ✅ FIX: groups sort by head.created_at DESC (string iso)
+ */
+usort($groupList, function($a, $b){
+  $ai = (string)($a['head']['created_at'] ?? '');
+  $bi = (string)($b['head']['created_at'] ?? '');
+  // ISO string compare works
+  if ($ai === $bi) return 0;
+  return ($ai < $bi) ? 1 : -1;
+});
+
+$hasNext = false;
 if (count($groupList) > $limit) {
   $hasNext = true;
   $groupList = array_slice($groupList, 0, $limit);
 }
 
-// next cursor: son kartın head event’i üzerinden
+// next cursor based on last card head
 $nextCursor = '';
 if (!empty($groupList)) {
   $lastHead = $groupList[count($groupList)-1]['head'];
@@ -227,7 +269,6 @@ if (!empty($groupList)) {
   }
 }
 
-// build base query for pagination links (preserve filters)
 function build_qs(array $extra = []): string {
   $keep = ['event','user','module','doc_type','doc_id','q','limit'];
   $p = [];
@@ -270,7 +311,6 @@ require_once __DIR__ . '/../app/views/layout/header.php';
             .tl-card{ background:#fff; border:1px solid rgba(0,0,0,.10); border-radius:16px; padding:14px; }
 
             .tl-row1{ display:flex; justify-content:space-between; flex-wrap:wrap; gap:10px; margin-bottom:8px; }
-            .tl-code{ font-family: ui-monospace, Menlo, Monaco, Consolas, monospace; background:rgba(0,0,0,.05); padding:3px 8px; border-radius:999px; border:1px solid rgba(0,0,0,.10); font-size:12px; }
             .tl-meta{ color:rgba(0,0,0,.55); font-size:12px; display:flex; gap:10px; flex-wrap:wrap; align-items:center; }
 
             .tl-chips{ display:flex; gap:8px; flex-wrap:wrap; margin-top:8px; }
@@ -278,7 +318,6 @@ require_once __DIR__ . '/../app/views/layout/header.php';
 
             .tl-actions{ display:flex; gap:8px; flex-wrap:wrap; margin-top:10px; }
 
-            /* ✅ NEW: action rows inside card */
             .tl-lines{ margin-top:12px; border-top:1px dashed rgba(0,0,0,.12); padding-top:10px; display:flex; flex-direction:column; gap:8px; }
             .tl-line{ display:flex; justify-content:space-between; gap:10px; flex-wrap:wrap; }
             .tl-line-left{ display:flex; gap:8px; flex-wrap:wrap; align-items:center; }
@@ -334,15 +373,12 @@ require_once __DIR__ . '/../app/views/layout/header.php';
 
                 $docUrl = doc_url($target);
 
-                // head refs
-                $refs = (array)($head['refs'] ?? []);
-                $logId  = $refs['log_id'] ?? ($head['log_id'] ?? null);
-                $snapId = $refs['snapshot_id'] ?? ($head['snapshot_id'] ?? null);
-                $prevId = '';
-                if (!empty($refs['prev_snapshot_id'])) $prevId = (string)$refs['prev_snapshot_id'];
-                elseif (!empty($head['prev_snapshot_id'])) $prevId = (string)$head['prev_snapshot_id'];
+                // ✅ FIX: card refs from best item
+                $best = pick_best_refs($items);
+                $logId  = $best['log_id'];
+                $snapId = $best['snapshot_id'];
+                $prevId = $best['prev_snapshot_id'];
 
-                // kart title
                 $cardTitle = (string)($sum['title'] ?? '');
                 if ($cardTitle === '') {
                   if ($title !== '') $cardTitle = $title;
@@ -350,7 +386,6 @@ require_once __DIR__ . '/../app/views/layout/header.php';
                   else $cardTitle = strtoupper($tMod) . ' ' . $tDt;
                 }
 
-                // kart subtitle / meta
                 $headTime = fmt_tr((string)($head['created_at'] ?? ''));
                 $headUser = (string)($head['context']['username'] ?? '');
               ?>
@@ -403,7 +438,6 @@ require_once __DIR__ . '/../app/views/layout/header.php';
                   <?php endif; ?>
                 </div>
 
-                <!-- ✅ NEW: aynı evrak altındaki tüm eventleri tek kart içinde göster -->
                 <div class="tl-lines">
                   <?php
                     $maxLines = 12;
@@ -418,19 +452,12 @@ require_once __DIR__ . '/../app/views/layout/header.php';
 
                       $d = (array)($ev['data'] ?? []);
                       $s = is_array(($d['summary'] ?? null)) ? $d['summary'] : [];
-                      $lineTitle = (string)($s['title'] ?? '');
-                      if ($lineTitle === '') $lineTitle = $code;
                       $lineSub = (string)($s['subtitle'] ?? '');
 
                       $r = (array)($ev['refs'] ?? []);
                       $lineSnap = $r['snapshot_id'] ?? ($ev['snapshot_id'] ?? null);
                       $linePrev = $r['prev_snapshot_id'] ?? ($ev['prev_snapshot_id'] ?? null);
                       $lineLog  = $r['log_id'] ?? ($ev['log_id'] ?? null);
-
-                      $mini = [];
-                      if ($lineLog)  $mini[] = '<a class="tl-btn" style="height:32px;padding:0 10px;border-radius:10px;" target="_blank" href="/php-mongo-erp/public/log_view.php?log_id=' . urlencode((string)$lineLog) . '">LOG</a>';
-                      if ($lineSnap) $mini[] = '<a class="tl-btn" style="height:32px;padding:0 10px;border-radius:10px;" target="_blank" href="/php-mongo-erp/public/snapshot_view.php?snapshot_id=' . urlencode((string)$lineSnap) . '">SNAP</a>';
-                      if ($lineSnap && $linePrev) $mini[] = '<a class="tl-btn" style="height:32px;padding:0 10px;border-radius:10px;" target="_blank" href="/php-mongo-erp/public/snapshot_diff_view.php?snapshot_id=' . urlencode((string)$lineSnap) . '">DIFF</a>';
                   ?>
                     <div class="tl-line">
                       <div class="tl-line-left">
@@ -442,7 +469,15 @@ require_once __DIR__ . '/../app/views/layout/header.php';
                         <?php endif; ?>
                       </div>
                       <div style="display:flex;gap:8px;flex-wrap:wrap;">
-                        <?php echo implode('', $mini); ?>
+                        <?php if ($lineLog): ?>
+                          <a class="tl-btn" style="height:32px;padding:0 10px;border-radius:10px;" target="_blank" href="/php-mongo-erp/public/log_view.php?log_id=<?php echo urlencode((string)$lineLog); ?>">LOG</a>
+                        <?php endif; ?>
+                        <?php if ($lineSnap): ?>
+                          <a class="tl-btn" style="height:32px;padding:0 10px;border-radius:10px;" target="_blank" href="/php-mongo-erp/public/snapshot_view.php?snapshot_id=<?php echo urlencode((string)$lineSnap); ?>">SNAP</a>
+                        <?php endif; ?>
+                        <?php if ($lineSnap && $linePrev): ?>
+                          <a class="tl-btn" style="height:32px;padding:0 10px;border-radius:10px;" target="_blank" href="/php-mongo-erp/public/snapshot_diff_view.php?snapshot_id=<?php echo urlencode((string)$lineSnap); ?>">DIFF</a>
+                        <?php endif; ?>
                       </div>
                     </div>
                   <?php endforeach; ?>

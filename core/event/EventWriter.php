@@ -2,12 +2,10 @@
 /**
  * core/event/EventWriter.php (FINAL)
  *
- * - Event insert helper
- * - ✅ target meta auto-fill: doc_no / doc_title / status
- *   Fallback sırası:
- *   1) target içindekiler
- *   2) data.summary (doc_no/title/status)
- *   3) refs.snapshot_id üzerinden SNAP01E.target
+ * ✅ FIX:
+ * - context içine PERIOD01T_id + period_id birlikte yazılır.
+ * - buildTargetKey period fallback ile üretir.
+ * - target meta auto-fill: doc_no / doc_title / status (önceki FINAL mantık korunur)
  */
 
 final class EventWriter
@@ -25,16 +23,17 @@ final class EventWriter
 
     $target = self::normalizeTargetMeta($target, $data, $refs);
 
-    // target_key üret (eventleri aynı evrak altında gruplayabilmek için)
     $targetKey = self::buildTargetKey($target, $ctx);
 
     $nowMs = (int) floor(microtime(true) * 1000);
     $nowUtc = new MongoDB\BSON\UTCDateTime($nowMs);
 
-    // request_id yoksa üret (debug için)
     if (!isset($refs['request_id']) || !is_string($refs['request_id']) || trim($refs['request_id']) === '') {
       $refs['request_id'] = bin2hex(random_bytes(8));
     }
+
+    // ✅ period fallback
+    $period = $ctx['period_id'] ?? ($ctx['PERIOD01T_id'] ?? ($ctx['period'] ?? null));
 
     $doc = [
       'event_code' => $eventCode,
@@ -44,7 +43,11 @@ final class EventWriter
         'username'     => $ctx['username'] ?? null,
         'UDEF01_id'    => $ctx['UDEF01_id'] ?? null,
         'CDEF01_id'    => $ctx['CDEF01_id'] ?? null,
-        'period_id'    => $ctx['period_id'] ?? null,
+
+        // ✅ timeline filtre uyumu
+        'PERIOD01T_id' => $ctx['PERIOD01T_id'] ?? ($ctx['period_id'] ?? null),
+        'period_id'    => $period,
+
         'facility_id'  => $ctx['facility_id'] ?? null,
         'session_id'   => $ctx['session_id'] ?? ($_SESSION['sid'] ?? null),
       ],
@@ -54,7 +57,6 @@ final class EventWriter
         'doc_type'  => $target['doc_type'] ?? null,
         'doc_id'    => $target['doc_id'] ?? null,
 
-        // ✅ target meta (timeline kartları için)
         'doc_no'    => $target['doc_no'] ?? null,
         'doc_title' => $target['doc_title'] ?? null,
         'status'    => $target['status'] ?? null,
@@ -66,7 +68,6 @@ final class EventWriter
       'data' => $data,
     ];
 
-    // boş stringleri null'a çevir (index/unique çakışmalarını azaltır)
     $doc = self::emptyToNullDeep($doc);
 
     $ins = MongoManager::collection('EVENT01E')->insertOne($doc);
@@ -80,24 +81,19 @@ final class EventWriter
     ];
   }
 
-  /**
-   * ✅ target.meta auto fill
-   */
   private static function normalizeTargetMeta(array $target, array $data, array $refs): array
   {
     $docNo    = (string)($target['doc_no'] ?? '');
     $docTitle = (string)($target['doc_title'] ?? '');
     $status   = (string)($target['status'] ?? '');
 
-    // 1) summary fallback
     $sum = $data['summary'] ?? null;
     if (is_array($sum)) {
-      if ($docNo === '')    $docNo = (string)($sum['doc_no'] ?? '');
-      if ($docTitle === '') $docTitle = (string)($sum['title'] ?? ($sum['doc_title'] ?? ''));
+      if ($docNo === '')    $docNo = (string)($sum['doc_no'] ?? ($sum['code'] ?? ''));
+      if ($docTitle === '') $docTitle = (string)($sum['title'] ?? ($sum['doc_title'] ?? ($sum['name'] ?? '')));
       if ($status === '')   $status = (string)($sum['status'] ?? '');
     }
 
-    // 2) snapshot fallback
     if (($docNo === '' || $docTitle === '' || $status === '') && !empty($refs['snapshot_id'])) {
       $snapTarget = self::loadSnapshotTarget((string)$refs['snapshot_id']);
       if (is_array($snapTarget)) {
@@ -119,11 +115,8 @@ final class EventWriter
     $snapshotId = trim($snapshotId);
     if ($snapshotId === '') return null;
 
-    try {
-      $oid = new MongoDB\BSON\ObjectId($snapshotId);
-    } catch (Throwable $e) {
-      return null;
-    }
+    try { $oid = new MongoDB\BSON\ObjectId($snapshotId); }
+    catch (Throwable $e) { return null; }
 
     $doc = MongoManager::collection('SNAP01E')->findOne(
       ['_id' => $oid],
@@ -142,14 +135,13 @@ final class EventWriter
   private static function buildTargetKey(array $target, array $ctx): string
   {
     $cdef     = (string)($ctx['CDEF01_id'] ?? '');
-    $period   = (string)($ctx['period_id'] ?? '');
+    $period   = (string)($ctx['period_id'] ?? ($ctx['PERIOD01T_id'] ?? ($ctx['period'] ?? '')));
     $facility = (string)($ctx['facility_id'] ?? '');
 
     $module   = (string)($target['module'] ?? '');
     $docType  = (string)($target['doc_type'] ?? '');
     $docId    = (string)($target['doc_id'] ?? '');
 
-    // aynı formatı snapshot/lock tarafında da kullanıyorsan burada da uyumlu kalır
     return implode('|', [$cdef, $period, $facility, $module, $docType, $docId]);
   }
 
@@ -158,12 +150,8 @@ final class EventWriter
     if ($v instanceof MongoDB\Model\BSONDocument || $v instanceof MongoDB\Model\BSONArray) {
       $v = $v->getArrayCopy();
     }
-    if ($v instanceof MongoDB\BSON\UTCDateTime) {
-      return $v->toDateTime()->format('c');
-    }
-    if ($v instanceof MongoDB\BSON\ObjectId) {
-      return (string)$v;
-    }
+    if ($v instanceof MongoDB\BSON\UTCDateTime) return $v->toDateTime()->format('c');
+    if ($v instanceof MongoDB\BSON\ObjectId) return (string)$v;
     if (is_array($v)) {
       $out = [];
       foreach ($v as $k => $vv) $out[$k] = self::bsonToArray($vv);
@@ -180,9 +168,7 @@ final class EventWriter
     }
     if (is_array($v)) {
       $out = [];
-      foreach ($v as $k => $vv) {
-        $out[$k] = self::emptyToNullDeep($vv);
-      }
+      foreach ($v as $k => $vv) $out[$k] = self::emptyToNullDeep($vv);
       return $out;
     }
     return $v;
